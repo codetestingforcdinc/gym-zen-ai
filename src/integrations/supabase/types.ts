@@ -14,6 +14,78 @@ export type Database = {
   }
   public: {
     Tables: {
+      ads: {
+        Row: {
+          active: boolean | null
+          clicks: number | null
+          created_at: string | null
+          id: string
+          image_url: string
+          impressions: number | null
+          link_url: string | null
+          title: string
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          clicks?: number | null
+          created_at?: string | null
+          id?: string
+          image_url: string
+          impressions?: number | null
+          link_url?: string | null
+          title: string
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          clicks?: number | null
+          created_at?: string | null
+          id?: string
+          image_url?: string
+          impressions?: number | null
+          link_url?: string | null
+          title?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      content_sections: {
+        Row: {
+          content_data: Json
+          content_type: string
+          created_at: string | null
+          display_order: number | null
+          id: string
+          page: string
+          section_key: string
+          updated_at: string | null
+          visible: boolean | null
+        }
+        Insert: {
+          content_data: Json
+          content_type: string
+          created_at?: string | null
+          display_order?: number | null
+          id?: string
+          page: string
+          section_key: string
+          updated_at?: string | null
+          visible?: boolean | null
+        }
+        Update: {
+          content_data?: Json
+          content_type?: string
+          created_at?: string | null
+          display_order?: number | null
+          id?: string
+          page?: string
+          section_key?: string
+          updated_at?: string | null
+          visible?: boolean | null
+        }
+        Relationships: []
+      }
       exercises: {
         Row: {
           category: string
@@ -47,6 +119,39 @@ export type Database = {
           target_muscles?: string[] | null
           updated_at?: string | null
           video_url?: string
+        }
+        Relationships: []
+      }
+      pages: {
+        Row: {
+          content: Json
+          created_at: string | null
+          id: string
+          meta_description: string | null
+          published: boolean | null
+          slug: string
+          title: string
+          updated_at: string | null
+        }
+        Insert: {
+          content: Json
+          created_at?: string | null
+          id?: string
+          meta_description?: string | null
+          published?: boolean | null
+          slug: string
+          title: string
+          updated_at?: string | null
+        }
+        Update: {
+          content?: Json
+          created_at?: string | null
+          id?: string
+          meta_description?: string | null
+          published?: boolean | null
+          slug?: string
+          title?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
@@ -86,6 +191,30 @@ export type Database = {
           name?: string
           updated_at?: string | null
           weight?: number
+        }
+        Relationships: []
+      }
+      theme_settings: {
+        Row: {
+          created_at: string | null
+          id: string
+          setting_key: string
+          setting_value: Json
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          setting_key: string
+          setting_value: Json
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          setting_key?: string
+          setting_value?: Json
+          updated_at?: string | null
         }
         Relationships: []
       }

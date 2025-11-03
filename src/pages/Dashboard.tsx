@@ -10,6 +10,7 @@ import Exercise from "@/components/dashboard/Exercise";
 import MentalWellness from "@/components/dashboard/MentalWellness";
 import DietNutrition from "@/components/dashboard/DietNutrition";
 import ProfessionalHelp from "@/components/dashboard/ProfessionalHelp";
+import { AdDisplay } from "@/components/AdDisplay";
 
 const Dashboard = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -83,6 +84,9 @@ const Dashboard = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
+        <div className="mb-6">
+          <AdDisplay />
+        </div>
         <Tabs defaultValue="profile" className="w-full">
           <TabsList className="grid w-full grid-cols-5 mb-8">
             <TabsTrigger value="profile">Profile</TabsTrigger>

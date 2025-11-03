@@ -10,7 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Users, Dumbbell, Plus, Trash2 } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AdsManager } from "@/components/admin/AdsManager";
+import { ContentEditor } from "@/components/admin/ContentEditor";
+import { PageManager } from "@/components/admin/PageManager";
+import { ThemeCustomizer } from "@/components/admin/ThemeCustomizer";
 
 const Admin = () => {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -191,9 +194,13 @@ const Admin = () => {
 
       <main className="container mx-auto px-4 py-8">
         <Tabs defaultValue="users" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-8">
-            <TabsTrigger value="users">User Management</TabsTrigger>
-            <TabsTrigger value="exercises">Exercise Management</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-6 mb-8">
+            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="exercises">Exercises</TabsTrigger>
+            <TabsTrigger value="ads">Ads</TabsTrigger>
+            <TabsTrigger value="content">Content</TabsTrigger>
+            <TabsTrigger value="pages">Pages</TabsTrigger>
+            <TabsTrigger value="theme">Theme</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users">
@@ -360,6 +367,22 @@ const Admin = () => {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          <TabsContent value="ads">
+            <AdsManager />
+          </TabsContent>
+
+          <TabsContent value="content">
+            <ContentEditor />
+          </TabsContent>
+
+          <TabsContent value="pages">
+            <PageManager />
+          </TabsContent>
+
+          <TabsContent value="theme">
+            <ThemeCustomizer />
           </TabsContent>
         </Tabs>
       </main>
