@@ -29,6 +29,8 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const [currentReps, setCurrentReps] = useState(0);
   const [isDetecting, setIsDetecting] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
+  const [formFeedback, setFormFeedback] = useState<string>("");
+  const [incorrectJoints, setIncorrectJoints] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
@@ -119,6 +121,49 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
   };
 
+  const checkForm = (keypoints: any[]) => {
+    const incorrect: string[] = [];
+    let feedback = "";
+
+    // Get key body points
+    const leftHip = keypoints.find(kp => kp.name === "left_hip");
+    const rightHip = keypoints.find(kp => kp.name === "right_hip");
+    const leftKnee = keypoints.find(kp => kp.name === "left_knee");
+    const rightKnee = keypoints.find(kp => kp.name === "right_knee");
+    const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
+    const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
+    const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
+    const rightShoulder = keypoints.find(kp => kp.name === "right_shoulder");
+
+    // Check knee alignment (knees shouldn't go past toes)
+    if (leftKnee && leftAnkle && leftKnee.score > 0.3 && leftAnkle.score > 0.3) {
+      if (leftKnee.x > leftAnkle.x + 30) {
+        incorrect.push("left_knee", "left_ankle");
+        feedback = "Keep knees behind toes";
+      }
+    }
+
+    // Check back alignment (should be straight)
+    if (leftShoulder && leftHip && leftShoulder.score > 0.3 && leftHip.score > 0.3) {
+      const backAngle = Math.abs(leftShoulder.x - leftHip.x);
+      if (backAngle > 50) {
+        incorrect.push("left_shoulder", "left_hip");
+        feedback = "Keep back straight";
+      }
+    }
+
+    // Check squat depth
+    if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
+      if (leftHip.y < leftKnee.y - 20) {
+        incorrect.push("left_hip", "right_hip", "left_knee", "right_knee");
+        feedback = "Go lower - hips below knees";
+      }
+    }
+
+    setIncorrectJoints(incorrect);
+    setFormFeedback(feedback);
+  };
+
   const detectPose = async () => {
     if (!videoRef.current || !detectorRef.current || !isDetecting) return;
 
@@ -129,23 +174,20 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         const pose = poses[0];
         const keypoints = pose.keypoints;
         
-        // Rep counting logic based on elbow angle (for exercises like curls, push-ups)
-        const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-        const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
-        const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+        // Check form
+        checkForm(keypoints);
+
+        // Rep counting logic based on hip height (for squats)
+        const leftHip = keypoints.find(kp => kp.name === "left_hip");
+        const leftKnee = keypoints.find(kp => kp.name === "left_knee");
         
-        if (leftShoulder && leftElbow && leftWrist && 
-            leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
+        if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
+          const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
           
-          // Calculate angle at elbow
-          const angle = Math.atan2(leftWrist.y - leftElbow.y, leftWrist.x - leftElbow.x) - 
-                       Math.atan2(leftShoulder.y - leftElbow.y, leftShoulder.x - leftElbow.x);
-          const angleDeg = Math.abs(angle * 180 / Math.PI);
-          
-          // Detect rep: bent (down) -> extended (up)
-          if (angleDeg < 90 && lastRepStateRef.current === "up") {
+          // Detect rep: standing (up) -> squatting (down) -> standing (up)
+          if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
             lastRepStateRef.current = "down";
-          } else if (angleDeg > 140 && lastRepStateRef.current === "down") {
+          } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
             lastRepStateRef.current = "up";
             setCurrentReps(prev => {
               const newReps = prev + 1;
@@ -180,10 +222,14 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const drawKeypoints = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     keypoints.forEach((keypoint) => {
       if (keypoint.score && keypoint.score > 0.3) {
+        const isIncorrect = incorrectJoints.includes(keypoint.name);
         ctx.beginPath();
-        ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = "lime";
+        ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = isIncorrect ? "#ef4444" : "#ffffff";
         ctx.fill();
+        ctx.strokeStyle = isIncorrect ? "#dc2626" : "#22c55e";
+        ctx.lineWidth = 3;
+        ctx.stroke();
       }
     });
   };
@@ -209,11 +255,12 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       const endKp = keypoints.find(kp => kp.name === end);
 
       if (startKp?.score && endKp?.score && startKp.score > 0.3 && endKp.score > 0.3) {
+        const isIncorrect = incorrectJoints.includes(start) || incorrectJoints.includes(end);
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
-        ctx.strokeStyle = "cyan";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
+        ctx.lineWidth = isIncorrect ? 6 : 4;
         ctx.stroke();
       }
     });
@@ -270,7 +317,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         {step === "exercise" && (
           <div className="space-y-4">
             <div className="flex gap-4">
-              <div className="flex-1 relative">
+              <div className="flex-1 relative bg-black rounded-lg overflow-hidden">
                 <video
                   ref={videoRef}
                   className="w-full rounded-lg"
@@ -280,9 +327,35 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                   ref={canvasRef}
                   width={640}
                   height={480}
-                  className="absolute top-0 left-0 w-full h-full"
+                  className="absolute top-0 left-0 w-full h-full pointer-events-none"
                   style={{ transform: "scaleX(-1)" }}
                 />
+                
+                {/* Rep Counter Circle */}
+                <div className="absolute bottom-8 left-8 w-32 h-32 rounded-full border-8 border-white flex items-center justify-center bg-black/30 backdrop-blur-sm">
+                  <span className="text-6xl font-bold text-white">{currentReps}</span>
+                </div>
+
+                {/* Exercise Name */}
+                <div className="absolute bottom-8 left-1/2 -translate-x-1/2">
+                  <h2 className="text-4xl font-bold text-white drop-shadow-lg">{exercise.name}</h2>
+                </div>
+
+                {/* Form Feedback */}
+                {formFeedback && (
+                  <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-red-500 text-white px-6 py-3 rounded-full font-semibold text-lg shadow-lg animate-pulse">
+                    {formFeedback}
+                  </div>
+                )}
+
+                {/* Progress Bar */}
+                <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-800">
+                  <div 
+                    className="h-full bg-red-500 transition-all duration-300"
+                    style={{ width: `${(currentReps / parseInt(targetReps)) * 100}%` }}
+                  />
+                </div>
+
                 {isModelLoading && (
                   <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
                     <div className="text-center space-y-2">
