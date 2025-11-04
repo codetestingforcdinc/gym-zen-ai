@@ -24,10 +24,11 @@ interface ExerciseSessionProps {
 }
 
 const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
-  const [step, setStep] = useState<"reps" | "camera" | "exercise" | "complete">("reps");
+  const [step, setStep] = useState<"reps" | "exercise" | "complete">("reps");
   const [targetReps, setTargetReps] = useState("");
   const [currentReps, setCurrentReps] = useState(0);
   const [isDetecting, setIsDetecting] = useState(false);
+  const [isModelLoading, setIsModelLoading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
@@ -54,7 +55,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       });
       return;
     }
-    setStep("camera");
+    setStep("exercise");
+    setIsModelLoading(true);
+    setupCamera();
   };
 
   const setupCamera = async () => {
@@ -88,11 +91,12 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
       };
       detectorRef.current = await poseDetection.createDetector(model, detectorConfig);
-      setStep("exercise");
+      setIsModelLoading(false);
       setIsDetecting(true);
       detectPose();
     } catch (error) {
       console.error("Error initializing pose detection:", error);
+      setIsModelLoading(false);
       toast({
         title: "Motion sensing error",
         description: "Failed to initialize motion detection",
@@ -188,11 +192,6 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     });
   };
 
-  useEffect(() => {
-    if (step === "camera" && open) {
-      setupCamera();
-    }
-  }, [step, open]);
 
   const handleManualRep = () => {
     setCurrentReps(prev => prev + 1);
@@ -240,15 +239,6 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
           </div>
         )}
 
-        {step === "camera" && (
-          <div className="flex items-center justify-center py-8">
-            <div className="text-center space-y-4">
-              <Camera className="w-16 h-16 mx-auto text-primary animate-pulse" />
-              <p className="text-lg">Setting up camera and motion sensing...</p>
-            </div>
-          </div>
-        )}
-
         {step === "exercise" && (
           <div className="space-y-4">
             <div className="flex gap-4">
@@ -265,6 +255,14 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                   className="absolute top-0 left-0 w-full h-full"
                   style={{ transform: "scaleX(-1)" }}
                 />
+                {isModelLoading && (
+                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                    <div className="text-center space-y-2">
+                      <Camera className="w-12 h-12 mx-auto text-white animate-pulse" />
+                      <p className="text-white text-sm">Loading motion sensing...</p>
+                    </div>
+                  </div>
+                )}
               </div>
               
               <div className="w-64 space-y-4">
