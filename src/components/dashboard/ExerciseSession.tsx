@@ -33,7 +33,14 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
   const animationFrameRef = useRef<number>();
+  const lastRepStateRef = useRef<"up" | "down">("up");
+  const successAudioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    successAudioRef.current = new Audio("/sounds/success.mp3");
+    successAudioRef.current.volume = 0.5;
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -105,6 +112,13 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
   };
 
+  const playSuccessSound = () => {
+    if (successAudioRef.current) {
+      successAudioRef.current.currentTime = 0;
+      successAudioRef.current.play().catch(err => console.log("Audio play failed:", err));
+    }
+  };
+
   const detectPose = async () => {
     if (!videoRef.current || !detectorRef.current || !isDetecting) return;
 
@@ -112,19 +126,32 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       const poses = await detectorRef.current.estimatePoses(videoRef.current);
       
       if (poses.length > 0) {
-        // Simple rep counting logic based on pose detection
-        // This is a simplified version - in production you'd implement proper exercise-specific logic
         const pose = poses[0];
         const keypoints = pose.keypoints;
         
-        // Example: Detect if user is in motion (you'd customize this per exercise)
+        // Rep counting logic based on elbow angle (for exercises like curls, push-ups)
+        const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
         const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
-        const rightElbow = keypoints.find(kp => kp.name === "right_elbow");
+        const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
         
-        if (leftElbow && rightElbow && leftElbow.score && rightElbow.score) {
-          if (leftElbow.score > 0.3 && rightElbow.score > 0.3) {
-            // Simplified rep detection
-            // In production, you'd track movement patterns
+        if (leftShoulder && leftElbow && leftWrist && 
+            leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
+          
+          // Calculate angle at elbow
+          const angle = Math.atan2(leftWrist.y - leftElbow.y, leftWrist.x - leftElbow.x) - 
+                       Math.atan2(leftShoulder.y - leftElbow.y, leftShoulder.x - leftElbow.x);
+          const angleDeg = Math.abs(angle * 180 / Math.PI);
+          
+          // Detect rep: bent (down) -> extended (up)
+          if (angleDeg < 90 && lastRepStateRef.current === "up") {
+            lastRepStateRef.current = "down";
+          } else if (angleDeg > 140 && lastRepStateRef.current === "down") {
+            lastRepStateRef.current = "up";
+            setCurrentReps(prev => {
+              const newReps = prev + 1;
+              playSuccessSound();
+              return newReps;
+            });
           }
         }
 
@@ -195,6 +222,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
   const handleManualRep = () => {
     setCurrentReps(prev => prev + 1);
+    playSuccessSound();
   };
 
   const handleClose = () => {
