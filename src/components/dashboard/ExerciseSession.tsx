@@ -224,11 +224,11 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       if (keypoint.score && keypoint.score > 0.3) {
         const isIncorrect = incorrectJoints.includes(keypoint.name);
         ctx.beginPath();
-        ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
+        ctx.arc(keypoint.x, keypoint.y, 6, 0, 2 * Math.PI);
         ctx.fillStyle = isIncorrect ? "#ef4444" : "#ffffff";
         ctx.fill();
-        ctx.strokeStyle = isIncorrect ? "#dc2626" : "#22c55e";
-        ctx.lineWidth = 3;
+        ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
+        ctx.lineWidth = 2;
         ctx.stroke();
       }
     });
@@ -260,7 +260,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
         ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = isIncorrect ? 6 : 4;
+        ctx.lineWidth = isIncorrect ? 8 : 5;
         ctx.stroke();
       }
     });
