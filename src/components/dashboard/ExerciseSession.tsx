@@ -80,6 +80,11 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
           videoRef.current?.play();
+          // Set canvas size to match video
+          if (canvasRef.current && videoRef.current) {
+            canvasRef.current.width = videoRef.current.videoWidth;
+            canvasRef.current.height = videoRef.current.videoHeight;
+          }
           initializePoseDetection();
         };
       }
@@ -325,8 +330,6 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                 />
                 <canvas
                   ref={canvasRef}
-                  width={640}
-                  height={480}
                   className="absolute top-0 left-0 w-full h-full pointer-events-none"
                   style={{ transform: "scaleX(-1)" }}
                 />
