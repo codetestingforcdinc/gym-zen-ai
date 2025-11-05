@@ -6,16 +6,17 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Camera, CheckCircle } from "lucide-react";
-import { Pose } from "@mediapipe/pose";
+import type { Pose as PoseType } from "@mediapipe/pose";
 import { motion } from "framer-motion";
 
 /**
  * ExerciseSession.tsx
- * - Integrates MediaPipe Pose via CDN
+ * - Integrates MediaPipe Pose with robust initialization and fallback
  * - Draws skeleton + keypoints on canvas
- * - Highlights incorrect joints in red (based on heuristics)
- * - Rep counting for squat / push-up / jumping jack
- * - Preserves all original UI, toasts, saving history, manual rep button etc.
+ * - Highlights incorrect joints in red based on heuristics
+ * - Angle-based detection & rep counting for:
+ *   Squats, Push-ups, Pull-ups, Planks (hold feedback), Lunges
+ * - Preserves your UI, toasts, saving history, manual rep button etc.
  */
 
 interface ExerciseSessionProps {
@@ -31,6 +32,24 @@ interface ExerciseSessionProps {
   onClose: () => void;
 }
 
+type LandmarkKey =
+  | "nose" | "left_eye_inner" | "left_eye" | "left_eye_outer" | "right_eye_inner"
+  | "right_eye" | "right_eye_outer" | "left_ear" | "right_ear" | "mouth_left"
+  | "mouth_right" | "left_shoulder" | "right_shoulder" | "left_elbow" | "right_elbow"
+  | "left_wrist" | "right_wrist" | "left_pinky" | "right_pinky" | "left_index"
+  | "right_index" | "left_thumb" | "right_thumb" | "left_hip" | "right_hip"
+  | "left_knee" | "right_knee" | "left_ankle" | "right_ankle" | "left_heel"
+  | "right_heel" | "left_foot_index" | "right_foot_index";
+
+const landmarkNames: LandmarkKey[] = [
+  "nose","left_eye_inner","left_eye","left_eye_outer","right_eye_inner","right_eye",
+  "right_eye_outer","left_ear","right_ear","mouth_left","mouth_right","left_shoulder",
+  "right_shoulder","left_elbow","right_elbow","left_wrist","right_wrist","left_pinky",
+  "right_pinky","left_index","right_index","left_thumb","right_thumb","left_hip",
+  "right_hip","left_knee","right_knee","left_ankle","right_ankle","left_heel",
+  "right_heel","left_foot_index","right_foot_index"
+];
+
 const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const [step, setStep] = useState<"reps" | "exercise" | "complete">("reps");
   const [targetReps, setTargetReps] = useState("");
@@ -39,13 +58,25 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [formFeedback, setFormFeedback] = useState<string>("");
   const [incorrectJoints, setIncorrectJoints] = useState<string[]>([]);
+  const [initError, setInitError] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const poseRef = useRef<Pose | null>(null);
+  const poseRef = useRef<any /* PoseType */ | null>(null);
+  const cameraUtilRef = useRef<any | null>(null);
   const animationFrameRef = useRef<number>();
   const lastRepStateRef = useRef<"up" | "down">("up");
   const successAudioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
+
+  // Tunable thresholds for exercises (angles in degrees or pixel heuristics)
+  const thresholds = {
+    squat: { hipKneeDown: 80, hipKneeUp: 120 }, // lower = knee near hip -> down
+    pushup: { elbowDown: 90, elbowUp: 160 },
+    pullup: { elbowDown: 70, elbowUp: 150 },
+    lunge: { kneeDown: 85, kneeUp: 150 },
+    plank: { hipShoulderMin: 160 } // larger = straighter torso
+  };
 
   // load audio
   useEffect(() => {
@@ -81,64 +112,41 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
     setStep("exercise");
     setIsModelLoading(true);
+    setInitError(null);
     setupCamera();
   };
 
   const setupCamera = async () => {
     try {
+      // Request camera
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480 },
         audio: false,
       });
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play();
-          // Set canvas size to match video
-          if (canvasRef.current && videoRef.current) {
-            canvasRef.current.width = videoRef.current.videoWidth;
-            canvasRef.current.height = videoRef.current.videoHeight;
-          }
-          initializePoseDetection();
-        };
-      }
-    } catch (error) {
+      if (!videoRef.current) throw new Error("Video element not found");
+
+      videoRef.current.srcObject = stream;
+      videoRef.current.onloadedmetadata = () => {
+        try {
+          videoRef.current!.play();
+        } catch (e) {
+          console.warn("Video play failed:", e);
+        }
+        // Set canvas to video size
+        if (canvasRef.current && videoRef.current) {
+          canvasRef.current.width = videoRef.current.videoWidth || 640;
+          canvasRef.current.height = videoRef.current.videoHeight || 480;
+        }
+        initializePoseDetection();
+      };
+    } catch (err: any) {
+      console.error("Camera setup error:", err);
+      setIsModelLoading(false);
+      setInitError("Camera permission denied or camera not available.");
       toast({
         title: "Camera access denied",
         description: "Please allow camera access to continue",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const initializePoseDetection = async () => {
-    try {
-      // Create MediaPipe Pose instance (CDN files)
-      poseRef.current = new Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-      });
-
-      poseRef.current.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        smoothSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-
-      poseRef.current.onResults(onPoseResults);
-
-      setIsModelLoading(false);
-      setIsDetecting(true);
-      detectPose();
-    } catch (error) {
-      console.error("Error initializing pose detection:", error);
-      setIsModelLoading(false);
-      toast({
-        title: "Motion sensing error",
-        description: "Failed to initialize motion detection",
         variant: "destructive",
       });
     }
@@ -151,8 +159,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
   };
 
-  // angle between points A-B-C (B is center)
+  // Helper: angle between A-B-C (B center)
   const getAngle = (pointA: any, pointB: any, pointC: any) => {
+    if (!pointA || !pointB || !pointC) return 0;
     const radians = Math.atan2(pointC.y - pointB.y, pointC.x - pointB.x) -
                     Math.atan2(pointA.y - pointB.y, pointA.x - pointB.x);
     let angle = Math.abs((radians * 180.0) / Math.PI);
@@ -160,184 +169,313 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     return angle;
   };
 
+  // Robust initialization: try to use Pose directly; if fails, dynamic import fallback
+  const initializePoseDetection = async () => {
+    setInitError(null);
+    try {
+      // attempt to create Pose using static import (common in bundlers)
+      // If Pose isn't available as constructor for some reason (CDN blocked), fallback to dynamic import
+      let PoseCtor: any;
+      let CameraUtil: any;
+
+      try {
+        // try dynamic import to ensure module is available in all environments
+        const poseModule = await import("@mediapipe/pose");
+        PoseCtor = (poseModule as any).Pose || (poseModule as any).default || (poseModule as any);
+      } catch (err) {
+        console.warn("Static @mediapipe/pose import failed, will try CDN-based locateFile route.", err);
+        // fallback: try to use global Pose if injected by CDN script (rare in bundlers)
+        PoseCtor = (window as any).Pose;
+      }
+
+      // If PoseCtor still not found, throw
+      if (!PoseCtor) {
+        throw new Error("MediaPipe Pose module not available. Ensure @mediapipe/pose installed or CDN reachable.");
+      }
+
+      // Camera util (used if available) - dynamic import if possible
+      try {
+        const cameraModule = await import("@mediapipe/camera_utils");
+        CameraUtil = (cameraModule as any).Camera || (cameraModule as any).default || (cameraModule as any);
+      } catch (err) {
+        // Not fatal — we can use a manual loop with pose.send()
+        CameraUtil = null;
+      }
+
+      // instantiate pose
+      poseRef.current = new PoseCtor({
+        locateFile: (file: string) => {
+          // prefer CDN if bundler doesn't supply assets
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+        },
+      });
+
+      // set options
+      poseRef.current.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        smoothSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      // bind results handler
+      poseRef.current.onResults(onPoseResults);
+
+      setIsModelLoading(false);
+      setIsDetecting(true);
+
+      // If CameraUtil available, use it to handle frames; else run manual loop
+      if (CameraUtil && videoRef.current) {
+        try {
+          // store camera util for potential cleanup
+          cameraUtilRef.current = new CameraUtil(videoRef.current, {
+            onFrame: async () => {
+              try {
+                await poseRef.current.send({ image: videoRef.current });
+              } catch (e) {
+                console.error("pose.send error (CameraUtil):", e);
+              }
+            },
+            width: 640,
+            height: 480,
+          });
+          // start camera util
+          await cameraUtilRef.current.start();
+        } catch (camErr) {
+          console.warn("CameraUtil start failed, falling back to manual loop:", camErr);
+          detectPose(); // fallback
+        }
+      } else {
+        // fallback manual detect loop (works in most cases)
+        detectPose();
+      }
+    } catch (error: any) {
+      console.error("Error initializing pose detection:", error);
+      setIsModelLoading(false);
+      setInitError(error?.message || "Failed to initialize motion detection.");
+      toast({
+        title: "Motion sensing error",
+        description: error?.message || "Failed to initialize motion detection",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // detectPose loop (manual fallback)
+  const detectPose = async () => {
+    if (!videoRef.current || !poseRef.current || !isDetecting) return;
+    try {
+      await poseRef.current.send({ image: videoRef.current });
+    } catch (err) {
+      console.error("detectPose: pose.send error:", err);
+    } finally {
+      animationFrameRef.current = requestAnimationFrame(detectPose);
+    }
+  };
+
+  // onPoseResults: called by MediaPipe when new landmarks are available
   const onPoseResults = (results: any) => {
     if (!canvasRef.current || !videoRef.current || !isDetecting) return;
 
     const canvasCtx = canvasRef.current.getContext("2d");
     if (!canvasCtx) return;
 
-    const videoWidth = videoRef.current.videoWidth;
-    const videoHeight = videoRef.current.videoHeight;
+    const videoWidth = videoRef.current.videoWidth || canvasRef.current.width;
+    const videoHeight = videoRef.current.videoHeight || canvasRef.current.height;
 
     // Clear canvas
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-    // draw mirrored video as background so overlay aligns with flipped video
-    // (we are flipping video with CSS scaleX(-1))
+    // draw video frame as background (canvas is mirrored by CSS)
     if (results.image) {
-      canvasCtx.save();
-      // draw image normally — canvas is also flipped via CSS, so just draw
-      canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
-      canvasCtx.restore();
-      // then overlay lines/points
+      try {
+        canvasCtx.save();
+        // draw image to full canvas
+        canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+        canvasCtx.restore();
+      } catch (e) {
+        // drawing might fail on cross-origin issues — ignore but log
+        console.warn("drawImage failed on canvas:", e);
+      }
     }
 
     if (results.poseLandmarks) {
       const landmarks = results.poseLandmarks;
 
-      // Convert normalized coordinates to pixel coordinates
+      // Convert normalized coords to pixel coords
       const keypoints = landmarks.map((landmark: any, index: number) => ({
-        x: landmark.x * videoWidth,
-        y: landmark.y * videoHeight,
-        z: landmark.z,
-        visibility: landmark.visibility ?? 1,
-        name: getPoseLandmarkName(index),
+        x: (landmark.x ?? 0) * videoWidth,
+        y: (landmark.y ?? 0) * videoHeight,
+        z: landmark.z ?? 0,
+        visibility: landmark.visibility ?? 0,
+        name: landmarkNames[index] ?? `landmark_${index}`,
       }));
 
-      // Check form
+      // Check form (sets incorrect joints & feedback)
       checkForm(keypoints);
 
-      // Draw skeleton then keypoints so points pop
+      // Draw skeleton and keypoints
       drawSkeleton(canvasCtx, keypoints);
       drawKeypoints(canvasCtx, keypoints);
 
-      // Rep counting logic
+      // Rep counting and exercise-specific logic
       countReps(keypoints);
     }
   };
 
   const getPoseLandmarkName = (index: number): string => {
-    const landmarkNames = [
-      "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner",
-      "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left",
-      "mouth_right", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-      "left_wrist", "right_wrist", "left_pinky", "right_pinky", "left_index",
-      "right_index", "left_thumb", "right_thumb", "left_hip", "right_hip",
-      "left_knee", "right_knee", "left_ankle", "right_ankle", "left_heel",
-      "right_heel", "left_foot_index", "right_foot_index"
-    ];
     return landmarkNames[index] || `landmark_${index}`;
   };
 
+  // Count reps — extended to include lunges, pull-ups, planks (plank won't count reps, it gives hold feedback)
   const countReps = (keypoints: any[]) => {
     const exerciseLower = exercise.name.toLowerCase();
 
-    // --- SQUAT: using hip-knee vertical distance heuristic (pixel based) ---
+    // helper to find landmark
+    const L = (name: string) => keypoints.find(kp => kp.name === name);
+
+    // --- SQUAT: hip-knee vertical distance heuristic (pixel-based) ---
     if (exerciseLower.includes("squat")) {
-      const leftHip = keypoints.find(kp => kp.name === "left_hip");
-      const leftKnee = keypoints.find(kp => kp.name === "left_knee");
-
-      if (leftHip && leftKnee && leftHip.visibility > 0.5 && leftKnee.visibility > 0.5) {
+      const leftHip = L("left_hip");
+      const leftKnee = L("left_knee");
+      if (leftHip && leftKnee && leftHip.visibility > 0.4 && leftKnee.visibility > 0.4) {
         const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
-
-        // thresholds are pixel-based; adjust if camera distance changes
-        if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
+        if (hipKneeDistance < thresholds.squat.hipKneeDown && lastRepStateRef.current === "up") {
           lastRepStateRef.current = "down";
-        } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
+        } else if (hipKneeDistance > thresholds.squat.hipKneeUp && lastRepStateRef.current === "down") {
           lastRepStateRef.current = "up";
-          setCurrentReps(prev => {
-            const newReps = prev + 1;
-            playSuccessSound();
-            if (newReps >= parseInt(targetReps)) {
-              setIsDetecting(false);
-              setStep("complete");
-              saveWorkoutHistory();
-            }
-            return newReps;
-          });
+          incrementReps();
         }
       }
     }
 
-    // --- PUSH-UP: using elbow angle ---
-    else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
-      const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-      const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
-      const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-
+    // --- PUSH-UP: elbow angle ---
+    else if (exerciseLower.includes("push") || (exerciseLower.includes("up") && exerciseLower.includes("push"))) {
+      const leftShoulder = L("left_shoulder");
+      const leftElbow = L("left_elbow");
+      const leftWrist = L("left_wrist");
       if (leftShoulder && leftElbow && leftWrist &&
-          leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
-
-        if (elbowAngle < 100 && lastRepStateRef.current === "up") {
+        if (elbowAngle < thresholds.pushup.elbowDown && lastRepStateRef.current === "up") {
           lastRepStateRef.current = "down";
-        } else if (elbowAngle > 160 && lastRepStateRef.current === "down") {
+        } else if (elbowAngle > thresholds.pushup.elbowUp && lastRepStateRef.current === "down") {
           lastRepStateRef.current = "up";
-          setCurrentReps(prev => {
-            const newReps = prev + 1;
-            playSuccessSound();
-            if (newReps >= parseInt(targetReps)) {
-              setIsDetecting(false);
-              setStep("complete");
-              saveWorkoutHistory();
-            }
-            return newReps;
-          });
+          incrementReps();
         }
       }
     }
 
-    // --- JUMPING JACK: arms up + legs spread heuristic ---
+    // --- PULL-UP: elbow angle & shoulder movement (top = elbows bent) ---
+    else if (exerciseLower.includes("pull")) {
+      const leftShoulder = L("left_shoulder");
+      const leftElbow = L("left_elbow");
+      const leftWrist = L("left_wrist");
+      if (leftShoulder && leftElbow && leftWrist &&
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
+        const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        // top of pull-up (chin over bar) => elbow angle small (flexed)
+        if (elbowAngle < thresholds.pullup.elbowDown && lastRepStateRef.current === "up") {
+          lastRepStateRef.current = "down";
+        } else if (elbowAngle > thresholds.pullup.elbowUp && lastRepStateRef.current === "down") {
+          lastRepStateRef.current = "up";
+          incrementReps();
+        }
+      }
+    }
+
+    // --- LUNGE: front-knee angle similar to squat (single-leg) ---
+    else if (exerciseLower.includes("lunge")) {
+      // use left leg as primary
+      const leftHip = L("left_hip");
+      const leftKnee = L("left_knee");
+      const leftAnkle = L("left_ankle");
+      if (leftHip && leftKnee && leftAnkle &&
+          leftHip.visibility > 0.4 && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const kneeAngle = getAngle(leftHip, leftKnee, leftAnkle);
+        if (kneeAngle < thresholds.lunge.kneeDown && lastRepStateRef.current === "up") {
+          lastRepStateRef.current = "down";
+        } else if (kneeAngle > thresholds.lunge.kneeUp && lastRepStateRef.current === "down") {
+          lastRepStateRef.current = "up";
+          incrementReps();
+        }
+      }
+    }
+
+    // --- JUMPING JACK existing logic kept above in original code (unchanged if present) ---
     else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
-      const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-      const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-      const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
-      const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
+      // original jack logic still active in your code path if exercise name includes 'jack'/'jump'
+      const leftWrist = L("left_wrist");
+      const leftShoulder = L("left_shoulder");
+      const leftAnkle = L("left_ankle");
+      const rightAnkle = L("right_ankle");
 
       if (leftWrist && leftShoulder && leftAnkle && rightAnkle &&
-          leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5 &&
-          leftAnkle.visibility > 0.5 && rightAnkle.visibility > 0.5) {
+          leftWrist.visibility > 0.4 && leftShoulder.visibility > 0.4 &&
+          leftAnkle.visibility > 0.4 && rightAnkle.visibility > 0.4) {
         const armsUp = leftWrist.y < leftShoulder.y - 50;
         const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > 80;
 
         if (armsUp && legsSpread && lastRepStateRef.current === "down") {
           lastRepStateRef.current = "up";
-          setCurrentReps(prev => {
-            const newReps = prev + 1;
-            playSuccessSound();
-            if (newReps >= parseInt(targetReps)) {
-              setIsDetecting(false);
-              setStep("complete");
-              saveWorkoutHistory();
-            }
-            return newReps;
-          });
+          incrementReps();
         } else if (!armsUp && !legsSpread && lastRepStateRef.current === "up") {
           lastRepStateRef.current = "down";
         }
       }
     }
+
+    // PLANK is treated as hold — we display feedback in checkForm; no reps increment
   };
 
+  const incrementReps = () => {
+    setCurrentReps(prev => {
+      const newReps = prev + 1;
+      playSuccessSound();
+      if (newReps >= parseInt(targetReps || "0")) {
+        setIsDetecting(false);
+        setStep("complete");
+        saveWorkoutHistory();
+      }
+      return newReps;
+    });
+  };
+
+  // Form checks — extended to include planks & lunges heuristics
   const checkForm = (keypoints: any[]) => {
     const incorrect: string[] = [];
     let feedback = "";
 
-    const leftHip = keypoints.find(kp => kp.name === "left_hip");
-    const rightHip = keypoints.find(kp => kp.name === "right_hip");
-    const leftKnee = keypoints.find(kp => kp.name === "left_knee");
-    const rightKnee = keypoints.find(kp => kp.name === "right_knee");
-    const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
-    const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
-    const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-    const rightShoulder = keypoints.find(kp => kp.name === "right_shoulder");
-    const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
-    const rightElbow = keypoints.find(kp => kp.name === "right_elbow");
-    const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-    const rightWrist = keypoints.find(kp => kp.name === "right_wrist");
+    const L = (name: string) => keypoints.find(kp => kp.name === name);
+
+    const leftHip = L("left_hip");
+    const rightHip = L("right_hip");
+    const leftKnee = L("left_knee");
+    const rightKnee = L("right_knee");
+    const leftAnkle = L("left_ankle");
+    const rightAnkle = L("right_ankle");
+    const leftShoulder = L("left_shoulder");
+    const rightShoulder = L("right_shoulder");
+    const leftElbow = L("left_elbow");
+    const rightElbow = L("right_elbow");
+    const leftWrist = L("left_wrist");
+    const rightWrist = L("right_wrist");
+    const leftHipExists = leftHip && leftHip.visibility > 0.4;
 
     const exerciseLower = exercise.name.toLowerCase();
 
-    // simple heuristics - good starting point; can improve with more math
+    // Squat form
     if (exerciseLower.includes("squat")) {
-      if (leftKnee && leftAnkle && leftKnee.visibility > 0.5 && leftAnkle.visibility > 0.5) {
+      if (leftKnee && leftAnkle && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
         if (leftKnee.x > leftAnkle.x + 30) {
           incorrect.push("left_knee", "left_ankle");
           feedback = "Keep knees behind toes";
         }
       }
 
-      if (leftShoulder && leftHip && leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5) {
+      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
         // horizontal displacement of shoulder vs hip as a proxy for rounding
         const backAngle = Math.abs(leftShoulder.x - leftHip.x);
         if (backAngle > 50) {
@@ -346,7 +484,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         }
       }
 
-      if (leftKnee && rightKnee && leftKnee.visibility > 0.5 && rightKnee.visibility > 0.5) {
+      if (leftKnee && rightKnee && leftKnee.visibility > 0.4 && rightKnee.visibility > 0.4) {
         const kneeDistance = Math.abs(leftKnee.x - rightKnee.x);
         if (kneeDistance < 60) {
           incorrect.push("left_knee", "right_knee");
@@ -355,43 +493,75 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       }
     }
 
-    if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
+    // Push-up form
+    if (exerciseLower.includes("push") || (exerciseLower.includes("up") && exerciseLower.includes("push"))) {
       if (leftShoulder && leftHip && leftAnkle &&
-          leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5 && leftAnkle.visibility > 0.5) {
-        const shoulderHipAngle = Math.abs(leftShoulder.y - leftHip.y);
-        const hipAnkleAngle = Math.abs(leftHip.y - leftAnkle.y);
-
-        if (shoulderHipAngle > 40 || hipAnkleAngle > 40) {
+          leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const shoulderHipDiff = Math.abs(leftShoulder.y - leftHip.y);
+        const hipAnkleDiff = Math.abs(leftHip.y - leftAnkle.y);
+        if (shoulderHipDiff > 40 || hipAnkleDiff > 40) {
           incorrect.push("left_shoulder", "left_hip", "left_ankle");
           feedback = "Keep body straight";
         }
       }
 
       if (leftShoulder && leftElbow && leftWrist &&
-          leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
-        if (elbowAngle < 70 || elbowAngle > 110) {
-          if (elbowAngle < 70) {
-            incorrect.push("left_elbow", "left_wrist");
-            feedback = "Go lower";
-          }
+        if (elbowAngle < 70) {
+          incorrect.push("left_elbow", "left_wrist");
+          feedback = "Lower chest more";
         }
       }
     }
 
-    if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
-      if (leftWrist && leftShoulder && leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5) {
-        if (leftWrist.y > leftShoulder.y - 50) {
-          incorrect.push("left_wrist", "right_wrist");
-          feedback = "Raise arms higher";
+    // Pull-up form
+    if (exerciseLower.includes("pull")) {
+      // basic checks: keep shoulders engaged and avoid swinging — heuristic: large hip movement = swing
+      if (leftHip && rightHip && leftHip.visibility > 0.4 && rightHip.visibility > 0.4) {
+        const hipShift = Math.abs(leftHip.x - rightHip.x);
+        if (hipShift > 150) { // arbitrary threshold for excessive swing across x-axis
+          incorrect.push("left_hip", "right_hip");
+          feedback = "Reduce swinging";
         }
       }
+      // elbow angle check
+      if (leftShoulder && leftElbow && leftWrist &&
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
+        const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        if (elbowAngle > 160) {
+          incorrect.push("left_elbow", "left_shoulder");
+          feedback = "Pull higher";
+        }
+      }
+    }
 
-      if (leftAnkle && rightAnkle && leftAnkle.visibility > 0.5 && rightAnkle.visibility > 0.5) {
-        const legSpread = Math.abs(leftAnkle.x - rightAnkle.x);
-        if (legSpread < 80) {
-          incorrect.push("left_ankle", "right_ankle");
-          feedback = "Spread legs wider";
+    // Lunge form
+    if (exerciseLower.includes("lunge")) {
+      // front knee alignment relative to ankle (x positions)
+      if (leftKnee && leftAnkle && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        if (leftKnee.x > leftAnkle.x + 30) {
+          incorrect.push("left_knee", "left_ankle");
+          feedback = "Keep knee behind toes";
+        }
+      }
+      // check torso upright
+      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
+        const torsoTilt = Math.abs(leftShoulder.y - leftHip.y);
+        if (torsoTilt > 60) {
+          incorrect.push("left_shoulder", "left_hip");
+          feedback = "Keep torso upright";
+        }
+      }
+    }
+
+    // Plank form
+    if (exerciseLower.includes("plank")) {
+      if (leftShoulder && leftHip && leftKnee && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftKnee.visibility > 0.4) {
+        const hipAngle = getAngle(leftShoulder, leftHip, leftKnee);
+        if (hipAngle < thresholds.plank.hipShoulderMin) {
+          incorrect.push("left_hip", "left_shoulder");
+          feedback = "Keep hips in line with shoulders";
         }
       }
     }
@@ -400,23 +570,10 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     setFormFeedback(feedback);
   };
 
-  const detectPose = async () => {
-    if (!videoRef.current || !poseRef.current || !isDetecting) return;
-
-    try {
-      await poseRef.current.send({ image: videoRef.current });
-      animationFrameRef.current = requestAnimationFrame(detectPose);
-    } catch (error) {
-      console.error("Error detecting pose:", error);
-      if (isDetecting) {
-        animationFrameRef.current = requestAnimationFrame(detectPose);
-      }
-    }
-  };
-
+  // draw keypoints
   const drawKeypoints = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     keypoints.forEach((keypoint) => {
-      if (keypoint.visibility && keypoint.visibility > 0.5) {
+      if (keypoint.visibility && keypoint.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(keypoint.name);
         ctx.beginPath();
         ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
@@ -429,8 +586,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     });
   };
 
+  // draw skeleton connections
   const drawSkeleton = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
-    const connections = [
+    const connections: [string,string][] = [
       ["left_shoulder", "right_shoulder"],
       ["left_shoulder", "left_elbow"],
       ["left_elbow", "left_wrist"],
@@ -449,24 +607,23 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       const startKp = keypoints.find(kp => kp.name === start);
       const endKp = keypoints.find(kp => kp.name === end);
 
-      if (startKp?.visibility && endKp?.visibility && startKp.visibility > 0.5 && endKp.visibility > 0.5) {
+      if (startKp?.visibility && endKp?.visibility && startKp.visibility > 0.4 && endKp.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(start) || incorrectJoints.includes(end);
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
         ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = isIncorrect ? 10 : 6;
+        ctx.lineWidth = isIncorrect ? 8 : 5;
         ctx.stroke();
       }
     });
   };
 
-
   const saveWorkoutHistory = () => {
     const workoutData = {
       exerciseName: exercise.name,
       reps: currentReps,
-      targetReps: parseInt(targetReps),
+      targetReps: parseInt(targetReps || "0"),
       date: new Date().toISOString(),
       difficulty: exercise.difficulty,
       category: exercise.category,
@@ -492,6 +649,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
+    // stop camera tracks if any
     if (videoRef.current?.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
@@ -499,12 +657,24 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     if (poseRef.current) {
       try { poseRef.current.close(); } catch {}
     }
+    // stop camera util if used
+    try {
+      if (cameraUtilRef.current && typeof cameraUtilRef.current.stop === "function") {
+        cameraUtilRef.current.stop();
+      }
+    } catch (e) {
+      // ignore
+    }
+
     setStep("reps");
     setCurrentReps(0);
     setTargetReps("");
+    setFormFeedback("");
+    setIncorrectJoints([]);
     onClose();
   };
 
+  // UI render
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -568,7 +738,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                 <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-800">
                   <div 
                     className="h-full bg-red-500 transition-all duration-300"
-                    style={{ width: `${(currentReps / (parseInt(targetReps) || 1)) * 100}%` }}
+                    style={{ width: `${(currentReps / (parseInt(targetReps || "1"))) * 100}%` }}
                   />
                 </div>
 
@@ -577,6 +747,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                     <div className="text-center space-y-2">
                       <Camera className="w-12 h-12 mx-auto text-white animate-pulse" />
                       <p className="text-white text-sm">Loading motion sensing...</p>
+                      {initError && <p className="text-sm text-red-300 mt-2">{initError}</p>}
                     </div>
                   </div>
                 )}
@@ -590,7 +761,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                       <span>Reps:</span>
                       <span className="font-bold">{currentReps} / {targetReps}</span>
                     </div>
-                    <Progress value={(currentReps / (parseInt(targetReps) || 1)) * 100} />
+                    <Progress value={(currentReps / (parseInt(targetReps || "1"))) * 100} />
                   </div>
                 </div>
 
