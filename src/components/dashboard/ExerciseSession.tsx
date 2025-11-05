@@ -6,8 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Camera, CheckCircle } from "lucide-react";
-import * as poseDetection from "@tensorflow-models/pose-detection";
-import * as tf from "@tensorflow/tfjs";
+import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
 import { motion } from "framer-motion";
 
 interface ExerciseSessionProps {
@@ -33,7 +32,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const [incorrectJoints, setIncorrectJoints] = useState<string[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
+  const poseRef = useRef<Pose | null>(null);
   const animationFrameRef = useRef<number>();
   const lastRepStateRef = useRef<"up" | "down">("up");
   const successAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -49,8 +48,8 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
-      if (detectorRef.current) {
-        detectorRef.current.dispose();
+      if (poseRef.current) {
+        poseRef.current.close();
       }
     };
   }, []);
@@ -99,12 +98,23 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
   const initializePoseDetection = async () => {
     try {
-      await tf.ready();
-      const model = poseDetection.SupportedModels.MoveNet;
-      const detectorConfig = {
-        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-      };
-      detectorRef.current = await poseDetection.createDetector(model, detectorConfig);
+      poseRef.current = new Pose({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+        },
+      });
+
+      poseRef.current.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        smoothSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      poseRef.current.onResults(onPoseResults);
+      
       setIsModelLoading(false);
       setIsDetecting(true);
       detectPose();
@@ -134,11 +144,141 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     return angle;
   };
 
+  const onPoseResults = (results: any) => {
+    if (!canvasRef.current || !videoRef.current || !isDetecting) return;
+
+    const canvasCtx = canvasRef.current.getContext("2d");
+    if (!canvasCtx) return;
+
+    const videoWidth = videoRef.current.videoWidth;
+    const videoHeight = videoRef.current.videoHeight;
+
+    // Clear canvas
+    canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+    if (results.poseLandmarks) {
+      const landmarks = results.poseLandmarks;
+      
+      // Convert normalized coordinates to pixel coordinates
+      const keypoints = landmarks.map((landmark: any, index: number) => ({
+        x: landmark.x * videoWidth,
+        y: landmark.y * videoHeight,
+        z: landmark.z,
+        visibility: landmark.visibility,
+        name: getPoseLandmarkName(index),
+      }));
+
+      // Check form
+      checkForm(keypoints);
+
+      // Draw skeleton
+      drawSkeleton(canvasCtx, keypoints);
+      drawKeypoints(canvasCtx, keypoints);
+
+      // Rep counting logic
+      countReps(keypoints);
+    }
+  };
+
+  const getPoseLandmarkName = (index: number): string => {
+    const landmarkNames = [
+      "nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner",
+      "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left",
+      "mouth_right", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+      "left_wrist", "right_wrist", "left_pinky", "right_pinky", "left_index",
+      "right_index", "left_thumb", "right_thumb", "left_hip", "right_hip",
+      "left_knee", "right_knee", "left_ankle", "right_ankle", "left_heel",
+      "right_heel", "left_foot_index", "right_foot_index"
+    ];
+    return landmarkNames[index] || `landmark_${index}`;
+  };
+
+  const countReps = (keypoints: any[]) => {
+    const exerciseLower = exercise.name.toLowerCase();
+
+    if (exerciseLower.includes("squat")) {
+      const leftHip = keypoints.find(kp => kp.name === "left_hip");
+      const leftKnee = keypoints.find(kp => kp.name === "left_knee");
+      
+      if (leftHip && leftKnee && leftHip.visibility > 0.5 && leftKnee.visibility > 0.5) {
+        const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
+        
+        if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
+          lastRepStateRef.current = "down";
+        } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
+          lastRepStateRef.current = "up";
+          setCurrentReps(prev => {
+            const newReps = prev + 1;
+            playSuccessSound();
+            if (newReps >= parseInt(targetReps)) {
+              setIsDetecting(false);
+              setStep("complete");
+              saveWorkoutHistory();
+            }
+            return newReps;
+          });
+        }
+      }
+    } else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
+      const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
+      const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
+      const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+      
+      if (leftShoulder && leftElbow && leftWrist && 
+          leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
+        const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        
+        if (elbowAngle < 100 && lastRepStateRef.current === "up") {
+          lastRepStateRef.current = "down";
+        } else if (elbowAngle > 160 && lastRepStateRef.current === "down") {
+          lastRepStateRef.current = "up";
+          setCurrentReps(prev => {
+            const newReps = prev + 1;
+            playSuccessSound();
+            if (newReps >= parseInt(targetReps)) {
+              setIsDetecting(false);
+              setStep("complete");
+              saveWorkoutHistory();
+            }
+            return newReps;
+          });
+        }
+      }
+    } else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
+      const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+      const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
+      const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
+      const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
+      
+      if (leftWrist && leftShoulder && leftAnkle && rightAnkle &&
+          leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5 && 
+          leftAnkle.visibility > 0.5 && rightAnkle.visibility > 0.5) {
+        const armsUp = leftWrist.y < leftShoulder.y - 50;
+        const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > 80;
+        
+        if (armsUp && legsSpread && lastRepStateRef.current === "down") {
+          lastRepStateRef.current = "up";
+          setCurrentReps(prev => {
+            const newReps = prev + 1;
+            playSuccessSound();
+            if (newReps >= parseInt(targetReps)) {
+              setIsDetecting(false);
+              setStep("complete");
+              saveWorkoutHistory();
+            }
+            return newReps;
+          });
+        } else if (!armsUp && !legsSpread && lastRepStateRef.current === "up") {
+          lastRepStateRef.current = "down";
+        }
+      }
+    }
+  };
+
   const checkForm = (keypoints: any[]) => {
     const incorrect: string[] = [];
     let feedback = "";
 
-    // Get key body points
     const leftHip = keypoints.find(kp => kp.name === "left_hip");
     const rightHip = keypoints.find(kp => kp.name === "right_hip");
     const leftKnee = keypoints.find(kp => kp.name === "left_knee");
@@ -154,18 +294,15 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
     const exerciseLower = exercise.name.toLowerCase();
 
-    // SQUATS
     if (exerciseLower.includes("squat")) {
-      // Check knee alignment (knees shouldn't go past toes)
-      if (leftKnee && leftAnkle && leftKnee.score > 0.3 && leftAnkle.score > 0.3) {
+      if (leftKnee && leftAnkle && leftKnee.visibility > 0.5 && leftAnkle.visibility > 0.5) {
         if (leftKnee.x > leftAnkle.x + 30) {
           incorrect.push("left_knee", "left_ankle");
           feedback = "Keep knees behind toes";
         }
       }
 
-      // Check back alignment (should be straight)
-      if (leftShoulder && leftHip && leftShoulder.score > 0.3 && leftHip.score > 0.3) {
+      if (leftShoulder && leftHip && leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5) {
         const backAngle = Math.abs(leftShoulder.x - leftHip.x);
         if (backAngle > 50) {
           incorrect.push("left_shoulder", "left_hip");
@@ -173,8 +310,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         }
       }
 
-      // Check knees outward
-      if (leftKnee && rightKnee && leftKnee.score > 0.3 && rightKnee.score > 0.3) {
+      if (leftKnee && rightKnee && leftKnee.visibility > 0.5 && rightKnee.visibility > 0.5) {
         const kneeDistance = Math.abs(leftKnee.x - rightKnee.x);
         if (kneeDistance < 60) {
           incorrect.push("left_knee", "right_knee");
@@ -183,11 +319,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       }
     }
 
-    // PUSH-UPS
     if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
-      // Check body alignment (should be straight line)
       if (leftShoulder && leftHip && leftAnkle && 
-          leftShoulder.score > 0.3 && leftHip.score > 0.3 && leftAnkle.score > 0.3) {
+          leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5 && leftAnkle.visibility > 0.5) {
         const shoulderHipAngle = Math.abs(leftShoulder.y - leftHip.y);
         const hipAnkleAngle = Math.abs(leftHip.y - leftAnkle.y);
         
@@ -197,9 +331,8 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         }
       }
 
-      // Check elbow position (should be 90 degrees at bottom)
       if (leftShoulder && leftElbow && leftWrist && 
-          leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
+          leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
         if (elbowAngle < 70 || elbowAngle > 110) {
           if (elbowAngle < 70) {
@@ -210,18 +343,15 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       }
     }
 
-    // JUMPING JACKS
     if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
-      // Check arms overhead position
-      if (leftWrist && leftShoulder && leftWrist.score > 0.3 && leftShoulder.score > 0.3) {
+      if (leftWrist && leftShoulder && leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5) {
         if (leftWrist.y > leftShoulder.y - 50) {
           incorrect.push("left_wrist", "right_wrist");
           feedback = "Raise arms higher";
         }
       }
 
-      // Check leg spread
-      if (leftAnkle && rightAnkle && leftAnkle.score > 0.3 && rightAnkle.score > 0.3) {
+      if (leftAnkle && rightAnkle && leftAnkle.visibility > 0.5 && rightAnkle.visibility > 0.5) {
         const legSpread = Math.abs(leftAnkle.x - rightAnkle.x);
         if (legSpread < 80) {
           incorrect.push("left_ankle", "right_ankle");
@@ -235,120 +365,29 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   };
 
   const detectPose = async () => {
-    if (!videoRef.current || !detectorRef.current || !isDetecting) return;
+    if (!videoRef.current || !poseRef.current || !isDetecting) return;
 
     try {
-      const poses = await detectorRef.current.estimatePoses(videoRef.current);
-      
-      if (poses.length > 0) {
-        const pose = poses[0];
-        const keypoints = pose.keypoints;
-        
-        // Check form
-        checkForm(keypoints);
-
-        const exerciseLower = exercise.name.toLowerCase();
-
-        // Rep counting logic based on exercise type
-        if (exerciseLower.includes("squat")) {
-          // Squat rep counting based on hip height
-          const leftHip = keypoints.find(kp => kp.name === "left_hip");
-          const leftKnee = keypoints.find(kp => kp.name === "left_knee");
-          
-          if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
-            const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
-            
-            if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
-              lastRepStateRef.current = "down";
-            } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
-              lastRepStateRef.current = "up";
-              setCurrentReps(prev => {
-                const newReps = prev + 1;
-                playSuccessSound();
-                return newReps;
-              });
-            }
-          }
-        } else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
-          // Push-up rep counting based on elbow angle
-          const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-          const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
-          const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-          
-          if (leftShoulder && leftElbow && leftWrist && 
-              leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
-            const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
-            
-            if (elbowAngle < 100 && lastRepStateRef.current === "up") {
-              lastRepStateRef.current = "down";
-            } else if (elbowAngle > 160 && lastRepStateRef.current === "down") {
-              lastRepStateRef.current = "up";
-              setCurrentReps(prev => {
-                const newReps = prev + 1;
-                playSuccessSound();
-                return newReps;
-              });
-            }
-          }
-        } else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
-          // Jumping jack rep counting based on arm and leg position
-          const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-          const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
-          const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
-          const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
-          
-          if (leftWrist && leftShoulder && leftAnkle && rightAnkle &&
-              leftWrist.score > 0.3 && leftShoulder.score > 0.3 && 
-              leftAnkle.score > 0.3 && rightAnkle.score > 0.3) {
-            const armsUp = leftWrist.y < leftShoulder.y - 50;
-            const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > 80;
-            
-            if (armsUp && legsSpread && lastRepStateRef.current === "down") {
-              lastRepStateRef.current = "up";
-              setCurrentReps(prev => {
-                const newReps = prev + 1;
-                playSuccessSound();
-                return newReps;
-              });
-            } else if (!armsUp && !legsSpread && lastRepStateRef.current === "up") {
-              lastRepStateRef.current = "down";
-            }
-          }
-        }
-
-        // Draw poses on canvas
-        if (canvasRef.current) {
-          const ctx = canvasRef.current.getContext("2d");
-          if (ctx && videoRef.current) {
-            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-            drawKeypoints(ctx, keypoints);
-            drawSkeleton(ctx, keypoints);
-          }
-        }
-      }
-
-      if (currentReps >= parseInt(targetReps)) {
-        setIsDetecting(false);
-        setStep("complete");
-        saveWorkoutHistory();
-      } else {
-        animationFrameRef.current = requestAnimationFrame(detectPose);
-      }
+      await poseRef.current.send({ image: videoRef.current });
+      animationFrameRef.current = requestAnimationFrame(detectPose);
     } catch (error) {
       console.error("Error detecting pose:", error);
+      if (isDetecting) {
+        animationFrameRef.current = requestAnimationFrame(detectPose);
+      }
     }
   };
 
   const drawKeypoints = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     keypoints.forEach((keypoint) => {
-      if (keypoint.score && keypoint.score > 0.3) {
+      if (keypoint.visibility && keypoint.visibility > 0.5) {
         const isIncorrect = incorrectJoints.includes(keypoint.name);
         ctx.beginPath();
-        ctx.arc(keypoint.x, keypoint.y, 6, 0, 2 * Math.PI);
+        ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
         ctx.fillStyle = isIncorrect ? "#ef4444" : "#ffffff";
         ctx.fill();
         ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 3;
         ctx.stroke();
       }
     });
@@ -374,13 +413,13 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       const startKp = keypoints.find(kp => kp.name === start);
       const endKp = keypoints.find(kp => kp.name === end);
 
-      if (startKp?.score && endKp?.score && startKp.score > 0.3 && endKp.score > 0.3) {
+      if (startKp?.visibility && endKp?.visibility && startKp.visibility > 0.5 && endKp.visibility > 0.5) {
         const isIncorrect = incorrectJoints.includes(start) || incorrectJoints.includes(end);
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
         ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = isIncorrect ? 8 : 5;
+        ctx.lineWidth = isIncorrect ? 10 : 6;
         ctx.stroke();
       }
     });
@@ -420,6 +459,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     if (videoRef.current?.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
+    }
+    if (poseRef.current) {
+      poseRef.current.close();
     }
     setStep("reps");
     setCurrentReps(0);
