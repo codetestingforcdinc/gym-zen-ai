@@ -6,8 +6,17 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Camera, CheckCircle } from "lucide-react";
-import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
+import { Pose } from "@mediapipe/pose";
 import { motion } from "framer-motion";
+
+/**
+ * ExerciseSession.tsx
+ * - Integrates MediaPipe Pose via CDN
+ * - Draws skeleton + keypoints on canvas
+ * - Highlights incorrect joints in red (based on heuristics)
+ * - Rep counting for squat / push-up / jumping jack
+ * - Preserves all original UI, toasts, saving history, manual rep button etc.
+ */
 
 interface ExerciseSessionProps {
   exercise: {
@@ -38,18 +47,25 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const successAudioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
 
+  // load audio
   useEffect(() => {
     successAudioRef.current = new Audio("/sounds/success.mp3");
     successAudioRef.current.volume = 0.5;
   }, []);
 
+  // cleanup on unmount
   useEffect(() => {
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
       if (poseRef.current) {
-        poseRef.current.close();
+        try { poseRef.current.close(); } catch {}
+      }
+      // stop camera tracks if any
+      if (videoRef.current?.srcObject) {
+        const s = videoRef.current.srcObject as MediaStream;
+        s.getTracks().forEach(t => t.stop());
       }
     };
   }, []);
@@ -98,10 +114,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
   const initializePoseDetection = async () => {
     try {
+      // Create MediaPipe Pose instance (CDN files)
       poseRef.current = new Pose({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-        },
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
       });
 
       poseRef.current.setOptions({
@@ -114,7 +129,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       });
 
       poseRef.current.onResults(onPoseResults);
-      
+
       setIsModelLoading(false);
       setIsDetecting(true);
       detectPose();
@@ -136,8 +151,9 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
   };
 
+  // angle between points A-B-C (B is center)
   const getAngle = (pointA: any, pointB: any, pointC: any) => {
-    const radians = Math.atan2(pointC.y - pointB.y, pointC.x - pointB.x) - 
+    const radians = Math.atan2(pointC.y - pointB.y, pointC.x - pointB.x) -
                     Math.atan2(pointA.y - pointB.y, pointA.x - pointB.x);
     let angle = Math.abs((radians * 180.0) / Math.PI);
     if (angle > 180.0) angle = 360 - angle;
@@ -156,22 +172,32 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     // Clear canvas
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
+    // draw mirrored video as background so overlay aligns with flipped video
+    // (we are flipping video with CSS scaleX(-1))
+    if (results.image) {
+      canvasCtx.save();
+      // draw image normally — canvas is also flipped via CSS, so just draw
+      canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+      canvasCtx.restore();
+      // then overlay lines/points
+    }
+
     if (results.poseLandmarks) {
       const landmarks = results.poseLandmarks;
-      
+
       // Convert normalized coordinates to pixel coordinates
       const keypoints = landmarks.map((landmark: any, index: number) => ({
         x: landmark.x * videoWidth,
         y: landmark.y * videoHeight,
         z: landmark.z,
-        visibility: landmark.visibility,
+        visibility: landmark.visibility ?? 1,
         name: getPoseLandmarkName(index),
       }));
 
       // Check form
       checkForm(keypoints);
 
-      // Draw skeleton
+      // Draw skeleton then keypoints so points pop
       drawSkeleton(canvasCtx, keypoints);
       drawKeypoints(canvasCtx, keypoints);
 
@@ -196,13 +222,15 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const countReps = (keypoints: any[]) => {
     const exerciseLower = exercise.name.toLowerCase();
 
+    // --- SQUAT: using hip-knee vertical distance heuristic (pixel based) ---
     if (exerciseLower.includes("squat")) {
       const leftHip = keypoints.find(kp => kp.name === "left_hip");
       const leftKnee = keypoints.find(kp => kp.name === "left_knee");
-      
+
       if (leftHip && leftKnee && leftHip.visibility > 0.5 && leftKnee.visibility > 0.5) {
         const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
-        
+
+        // thresholds are pixel-based; adjust if camera distance changes
         if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
           lastRepStateRef.current = "down";
         } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
@@ -219,15 +247,18 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
           });
         }
       }
-    } else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
+    }
+
+    // --- PUSH-UP: using elbow angle ---
+    else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
       const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
       const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
       const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
-      
-      if (leftShoulder && leftElbow && leftWrist && 
+
+      if (leftShoulder && leftElbow && leftWrist &&
           leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
-        
+
         if (elbowAngle < 100 && lastRepStateRef.current === "up") {
           lastRepStateRef.current = "down";
         } else if (elbowAngle > 160 && lastRepStateRef.current === "down") {
@@ -244,18 +275,21 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
           });
         }
       }
-    } else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
+    }
+
+    // --- JUMPING JACK: arms up + legs spread heuristic ---
+    else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
       const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
       const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
       const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
       const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
-      
+
       if (leftWrist && leftShoulder && leftAnkle && rightAnkle &&
-          leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5 && 
+          leftWrist.visibility > 0.5 && leftShoulder.visibility > 0.5 &&
           leftAnkle.visibility > 0.5 && rightAnkle.visibility > 0.5) {
         const armsUp = leftWrist.y < leftShoulder.y - 50;
         const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > 80;
-        
+
         if (armsUp && legsSpread && lastRepStateRef.current === "down") {
           lastRepStateRef.current = "up";
           setCurrentReps(prev => {
@@ -294,6 +328,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
     const exerciseLower = exercise.name.toLowerCase();
 
+    // simple heuristics - good starting point; can improve with more math
     if (exerciseLower.includes("squat")) {
       if (leftKnee && leftAnkle && leftKnee.visibility > 0.5 && leftAnkle.visibility > 0.5) {
         if (leftKnee.x > leftAnkle.x + 30) {
@@ -303,6 +338,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       }
 
       if (leftShoulder && leftHip && leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5) {
+        // horizontal displacement of shoulder vs hip as a proxy for rounding
         const backAngle = Math.abs(leftShoulder.x - leftHip.x);
         if (backAngle > 50) {
           incorrect.push("left_shoulder", "left_hip");
@@ -320,18 +356,18 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
 
     if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
-      if (leftShoulder && leftHip && leftAnkle && 
+      if (leftShoulder && leftHip && leftAnkle &&
           leftShoulder.visibility > 0.5 && leftHip.visibility > 0.5 && leftAnkle.visibility > 0.5) {
         const shoulderHipAngle = Math.abs(leftShoulder.y - leftHip.y);
         const hipAnkleAngle = Math.abs(leftHip.y - leftAnkle.y);
-        
+
         if (shoulderHipAngle > 40 || hipAnkleAngle > 40) {
           incorrect.push("left_shoulder", "left_hip", "left_ankle");
           feedback = "Keep body straight";
         }
       }
 
-      if (leftShoulder && leftElbow && leftWrist && 
+      if (leftShoulder && leftElbow && leftWrist &&
           leftShoulder.visibility > 0.5 && leftElbow.visibility > 0.5 && leftWrist.visibility > 0.5) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
         if (elbowAngle < 70 || elbowAngle > 110) {
@@ -461,7 +497,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       stream.getTracks().forEach(track => track.stop());
     }
     if (poseRef.current) {
-      poseRef.current.close();
+      try { poseRef.current.close(); } catch {}
     }
     setStep("reps");
     setCurrentReps(0);
@@ -510,7 +546,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                   className="absolute top-0 left-0 w-full h-full pointer-events-none"
                   style={{ transform: "scaleX(-1)" }}
                 />
-                
+
                 {/* Rep Counter Circle */}
                 <div className="absolute bottom-8 left-8 w-32 h-32 rounded-full border-8 border-white flex items-center justify-center bg-black/30 backdrop-blur-sm">
                   <span className="text-6xl font-bold text-white">{currentReps}</span>
@@ -532,7 +568,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                 <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-800">
                   <div 
                     className="h-full bg-red-500 transition-all duration-300"
-                    style={{ width: `${(currentReps / parseInt(targetReps)) * 100}%` }}
+                    style={{ width: `${(currentReps / (parseInt(targetReps) || 1)) * 100}%` }}
                   />
                 </div>
 
@@ -545,7 +581,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                   </div>
                 )}
               </div>
-              
+
               <div className="w-64 space-y-4">
                 <div className="bg-card p-4 rounded-lg border">
                   <h3 className="font-semibold mb-2">Progress</h3>
@@ -554,7 +590,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
                       <span>Reps:</span>
                       <span className="font-bold">{currentReps} / {targetReps}</span>
                     </div>
-                    <Progress value={(currentReps / parseInt(targetReps)) * 100} />
+                    <Progress value={(currentReps / (parseInt(targetReps) || 1)) * 100} />
                   </div>
                 </div>
 
