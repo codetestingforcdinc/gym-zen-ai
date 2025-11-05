@@ -126,6 +126,14 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     }
   };
 
+  const getAngle = (pointA: any, pointB: any, pointC: any) => {
+    const radians = Math.atan2(pointC.y - pointB.y, pointC.x - pointB.x) - 
+                    Math.atan2(pointA.y - pointB.y, pointA.x - pointB.x);
+    let angle = Math.abs((radians * 180.0) / Math.PI);
+    if (angle > 180.0) angle = 360 - angle;
+    return angle;
+  };
+
   const checkForm = (keypoints: any[]) => {
     const incorrect: string[] = [];
     let feedback = "";
@@ -139,29 +147,86 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
     const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
     const rightShoulder = keypoints.find(kp => kp.name === "right_shoulder");
+    const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
+    const rightElbow = keypoints.find(kp => kp.name === "right_elbow");
+    const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+    const rightWrist = keypoints.find(kp => kp.name === "right_wrist");
 
-    // Check knee alignment (knees shouldn't go past toes)
-    if (leftKnee && leftAnkle && leftKnee.score > 0.3 && leftAnkle.score > 0.3) {
-      if (leftKnee.x > leftAnkle.x + 30) {
-        incorrect.push("left_knee", "left_ankle");
-        feedback = "Keep knees behind toes";
+    const exerciseLower = exercise.name.toLowerCase();
+
+    // SQUATS
+    if (exerciseLower.includes("squat")) {
+      // Check knee alignment (knees shouldn't go past toes)
+      if (leftKnee && leftAnkle && leftKnee.score > 0.3 && leftAnkle.score > 0.3) {
+        if (leftKnee.x > leftAnkle.x + 30) {
+          incorrect.push("left_knee", "left_ankle");
+          feedback = "Keep knees behind toes";
+        }
+      }
+
+      // Check back alignment (should be straight)
+      if (leftShoulder && leftHip && leftShoulder.score > 0.3 && leftHip.score > 0.3) {
+        const backAngle = Math.abs(leftShoulder.x - leftHip.x);
+        if (backAngle > 50) {
+          incorrect.push("left_shoulder", "left_hip");
+          feedback = "Keep back straight";
+        }
+      }
+
+      // Check knees outward
+      if (leftKnee && rightKnee && leftKnee.score > 0.3 && rightKnee.score > 0.3) {
+        const kneeDistance = Math.abs(leftKnee.x - rightKnee.x);
+        if (kneeDistance < 60) {
+          incorrect.push("left_knee", "right_knee");
+          feedback = "Push knees outward";
+        }
       }
     }
 
-    // Check back alignment (should be straight)
-    if (leftShoulder && leftHip && leftShoulder.score > 0.3 && leftHip.score > 0.3) {
-      const backAngle = Math.abs(leftShoulder.x - leftHip.x);
-      if (backAngle > 50) {
-        incorrect.push("left_shoulder", "left_hip");
-        feedback = "Keep back straight";
+    // PUSH-UPS
+    if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
+      // Check body alignment (should be straight line)
+      if (leftShoulder && leftHip && leftAnkle && 
+          leftShoulder.score > 0.3 && leftHip.score > 0.3 && leftAnkle.score > 0.3) {
+        const shoulderHipAngle = Math.abs(leftShoulder.y - leftHip.y);
+        const hipAnkleAngle = Math.abs(leftHip.y - leftAnkle.y);
+        
+        if (shoulderHipAngle > 40 || hipAnkleAngle > 40) {
+          incorrect.push("left_shoulder", "left_hip", "left_ankle");
+          feedback = "Keep body straight";
+        }
+      }
+
+      // Check elbow position (should be 90 degrees at bottom)
+      if (leftShoulder && leftElbow && leftWrist && 
+          leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
+        const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        if (elbowAngle < 70 || elbowAngle > 110) {
+          if (elbowAngle < 70) {
+            incorrect.push("left_elbow", "left_wrist");
+            feedback = "Go lower";
+          }
+        }
       }
     }
 
-    // Check squat depth
-    if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
-      if (leftHip.y < leftKnee.y - 20) {
-        incorrect.push("left_hip", "right_hip", "left_knee", "right_knee");
-        feedback = "Go lower - hips below knees";
+    // JUMPING JACKS
+    if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
+      // Check arms overhead position
+      if (leftWrist && leftShoulder && leftWrist.score > 0.3 && leftShoulder.score > 0.3) {
+        if (leftWrist.y > leftShoulder.y - 50) {
+          incorrect.push("left_wrist", "right_wrist");
+          feedback = "Raise arms higher";
+        }
+      }
+
+      // Check leg spread
+      if (leftAnkle && rightAnkle && leftAnkle.score > 0.3 && rightAnkle.score > 0.3) {
+        const legSpread = Math.abs(leftAnkle.x - rightAnkle.x);
+        if (legSpread < 80) {
+          incorrect.push("left_ankle", "right_ankle");
+          feedback = "Spread legs wider";
+        }
       }
     }
 
@@ -182,23 +247,72 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
         // Check form
         checkForm(keypoints);
 
-        // Rep counting logic based on hip height (for squats)
-        const leftHip = keypoints.find(kp => kp.name === "left_hip");
-        const leftKnee = keypoints.find(kp => kp.name === "left_knee");
-        
-        if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
-          const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
+        const exerciseLower = exercise.name.toLowerCase();
+
+        // Rep counting logic based on exercise type
+        if (exerciseLower.includes("squat")) {
+          // Squat rep counting based on hip height
+          const leftHip = keypoints.find(kp => kp.name === "left_hip");
+          const leftKnee = keypoints.find(kp => kp.name === "left_knee");
           
-          // Detect rep: standing (up) -> squatting (down) -> standing (up)
-          if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
-            lastRepStateRef.current = "down";
-          } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
-            lastRepStateRef.current = "up";
-            setCurrentReps(prev => {
-              const newReps = prev + 1;
-              playSuccessSound();
-              return newReps;
-            });
+          if (leftHip && leftKnee && leftHip.score > 0.3 && leftKnee.score > 0.3) {
+            const hipKneeDistance = Math.abs(leftHip.y - leftKnee.y);
+            
+            if (hipKneeDistance < 80 && lastRepStateRef.current === "up") {
+              lastRepStateRef.current = "down";
+            } else if (hipKneeDistance > 120 && lastRepStateRef.current === "down") {
+              lastRepStateRef.current = "up";
+              setCurrentReps(prev => {
+                const newReps = prev + 1;
+                playSuccessSound();
+                return newReps;
+              });
+            }
+          }
+        } else if (exerciseLower.includes("push") || exerciseLower.includes("up")) {
+          // Push-up rep counting based on elbow angle
+          const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
+          const leftElbow = keypoints.find(kp => kp.name === "left_elbow");
+          const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+          
+          if (leftShoulder && leftElbow && leftWrist && 
+              leftShoulder.score > 0.3 && leftElbow.score > 0.3 && leftWrist.score > 0.3) {
+            const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+            
+            if (elbowAngle < 100 && lastRepStateRef.current === "up") {
+              lastRepStateRef.current = "down";
+            } else if (elbowAngle > 160 && lastRepStateRef.current === "down") {
+              lastRepStateRef.current = "up";
+              setCurrentReps(prev => {
+                const newReps = prev + 1;
+                playSuccessSound();
+                return newReps;
+              });
+            }
+          }
+        } else if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
+          // Jumping jack rep counting based on arm and leg position
+          const leftWrist = keypoints.find(kp => kp.name === "left_wrist");
+          const leftShoulder = keypoints.find(kp => kp.name === "left_shoulder");
+          const leftAnkle = keypoints.find(kp => kp.name === "left_ankle");
+          const rightAnkle = keypoints.find(kp => kp.name === "right_ankle");
+          
+          if (leftWrist && leftShoulder && leftAnkle && rightAnkle &&
+              leftWrist.score > 0.3 && leftShoulder.score > 0.3 && 
+              leftAnkle.score > 0.3 && rightAnkle.score > 0.3) {
+            const armsUp = leftWrist.y < leftShoulder.y - 50;
+            const legsSpread = Math.abs(leftAnkle.x - rightAnkle.x) > 80;
+            
+            if (armsUp && legsSpread && lastRepStateRef.current === "down") {
+              lastRepStateRef.current = "up";
+              setCurrentReps(prev => {
+                const newReps = prev + 1;
+                playSuccessSound();
+                return newReps;
+              });
+            } else if (!armsUp && !legsSpread && lastRepStateRef.current === "up") {
+              lastRepStateRef.current = "down";
+            }
           }
         }
 
@@ -216,6 +330,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       if (currentReps >= parseInt(targetReps)) {
         setIsDetecting(false);
         setStep("complete");
+        saveWorkoutHistory();
       } else {
         animationFrameRef.current = requestAnimationFrame(detectPose);
       }
@@ -271,6 +386,26 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     });
   };
 
+
+  const saveWorkoutHistory = () => {
+    const workoutData = {
+      exerciseName: exercise.name,
+      reps: currentReps,
+      targetReps: parseInt(targetReps),
+      date: new Date().toISOString(),
+      difficulty: exercise.difficulty,
+      category: exercise.category,
+    };
+
+    const history = JSON.parse(localStorage.getItem("workoutHistory") || "[]");
+    history.push(workoutData);
+    localStorage.setItem("workoutHistory", JSON.stringify(history));
+
+    toast({
+      title: "Workout saved!",
+      description: `${currentReps} reps of ${exercise.name} recorded`,
+    });
+  };
 
   const handleManualRep = () => {
     setCurrentReps(prev => prev + 1);
