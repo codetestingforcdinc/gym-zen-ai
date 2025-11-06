@@ -570,23 +570,38 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     setFormFeedback(feedback);
   };
 
-  // draw keypoints
+  // draw keypoints with enhanced visibility
   const drawKeypoints = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     keypoints.forEach((keypoint) => {
       if (keypoint.visibility && keypoint.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(keypoint.name);
+        
+        // Draw glow effect
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = isIncorrect ? "#ef4444" : "#00ff00";
+        
+        // Draw outer circle (glow)
+        ctx.beginPath();
+        ctx.arc(keypoint.x, keypoint.y, 12, 0, 2 * Math.PI);
+        ctx.fillStyle = isIncorrect ? "rgba(239, 68, 68, 0.5)" : "rgba(0, 255, 0, 0.5)";
+        ctx.fill();
+        
+        // Draw inner circle (main dot)
         ctx.beginPath();
         ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
-        ctx.fillStyle = isIncorrect ? "#ef4444" : "#ffffff";
+        ctx.fillStyle = isIncorrect ? "#ef4444" : "#00ff00";
         ctx.fill();
-        ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
         ctx.stroke();
+        
+        // Reset shadow
+        ctx.shadowBlur = 0;
       }
     });
   };
 
-  // draw skeleton connections
+  // draw skeleton connections with enhanced visibility
   const drawSkeleton = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     const connections: [string,string][] = [
       ["left_shoulder", "right_shoulder"],
@@ -609,12 +624,30 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
 
       if (startKp?.visibility && endKp?.visibility && startKp.visibility > 0.4 && endKp.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(start) || incorrectJoints.includes(end);
+        
+        // Draw glow effect for lines
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = isIncorrect ? "#ef4444" : "#00ff00";
+        
+        // Draw thicker background line for glow
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
-        ctx.strokeStyle = isIncorrect ? "#ef4444" : "#ffffff";
-        ctx.lineWidth = isIncorrect ? 8 : 5;
+        ctx.strokeStyle = isIncorrect ? "rgba(239, 68, 68, 0.6)" : "rgba(0, 255, 0, 0.6)";
+        ctx.lineWidth = isIncorrect ? 16 : 12;
         ctx.stroke();
+        
+        // Draw main line
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.moveTo(startKp.x, startKp.y);
+        ctx.lineTo(endKp.x, endKp.y);
+        ctx.strokeStyle = isIncorrect ? "#ef4444" : "#00ff00";
+        ctx.lineWidth = isIncorrect ? 10 : 8;
+        ctx.stroke();
+        
+        // Reset shadow
+        ctx.shadowBlur = 0;
       }
     });
   };
