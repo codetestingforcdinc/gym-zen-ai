@@ -69,13 +69,46 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const successAudioRef = useRef<HTMLAudioElement | null>(null);
   const { toast } = useToast();
 
-  // Tunable thresholds for exercises (angles in degrees or pixel heuristics)
+  // Comprehensive thresholds for all exercises with angular perfection
   const thresholds = {
-    squat: { hipKneeDown: 80, hipKneeUp: 120 }, // lower = knee near hip -> down
-    pushup: { elbowDown: 90, elbowUp: 160 },
-    pullup: { elbowDown: 70, elbowUp: 150 },
-    lunge: { kneeDown: 85, kneeUp: 150 },
-    plank: { hipShoulderMin: 160 } // larger = straighter torso
+    squat: { 
+      hipKneeDown: 80, 
+      hipKneeUp: 120,
+      kneeAnglePerfect: 90,  // perfect squat depth
+      hipAnglePerfect: 90,   // hip flexion
+      backAngleMin: 45,      // minimum back angle
+      kneeAlignmentTolerance: 15
+    },
+    pushup: { 
+      elbowDown: 90, 
+      elbowUp: 160,
+      elbowAnglePerfect: 90,  // perfect push-up depth
+      bodyAlignmentAngle: 170, // straight body line
+      shoulderAnglePerfect: 90
+    },
+    pullup: { 
+      elbowDown: 70, 
+      elbowUp: 150,
+      elbowAnglePerfect: 45,  // chin over bar
+      shoulderEngagement: 30
+    },
+    lunge: { 
+      kneeDown: 85, 
+      kneeUp: 150,
+      frontKneeAnglePerfect: 90,
+      backKneeAnglePerfect: 90,
+      torsoAngleMin: 80
+    },
+    plank: { 
+      hipShoulderMin: 160,
+      bodyAlignmentPerfect: 180, // perfectly straight
+      elbowAngle: 90
+    },
+    jumpingjack: {
+      armAngleUp: 160,      // arms overhead
+      armAngleDown: 30,     // arms at sides
+      legSpreadAngle: 40    // leg separation
+    }
   };
 
   // load audio
@@ -443,7 +476,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     });
   };
 
-  // Form checks — extended to include planks & lunges heuristics
+  // Comprehensive form checks with angular perfection for ALL exercises
   const checkForm = (keypoints: any[]) => {
     const incorrect: string[] = [];
     let feedback = "";
@@ -462,106 +495,291 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     const rightElbow = L("right_elbow");
     const leftWrist = L("left_wrist");
     const rightWrist = L("right_wrist");
-    const leftHipExists = leftHip && leftHip.visibility > 0.4;
 
     const exerciseLower = exercise.name.toLowerCase();
 
-    // Squat form
+    // SQUAT - Angular perfection checks
     if (exerciseLower.includes("squat")) {
-      if (leftKnee && leftAnkle && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+      // Check knee angle (hip-knee-ankle)
+      if (leftHip && leftKnee && leftAnkle && 
+          leftHip.visibility > 0.4 && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const kneeAngle = getAngle(leftHip, leftKnee, leftAnkle);
+        
+        if (kneeAngle < 70) {
+          incorrect.push("left_knee", "left_hip", "left_ankle");
+          feedback = "Squat too deep - protect knees";
+        } else if (kneeAngle > 110) {
+          incorrect.push("left_knee", "left_hip");
+          feedback = "Go deeper - aim for 90° knee angle";
+        }
+        
+        // Knee alignment - knees should track over toes
         if (leftKnee.x > leftAnkle.x + 30) {
           incorrect.push("left_knee", "left_ankle");
           feedback = "Keep knees behind toes";
         }
       }
 
-      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
-        // horizontal displacement of shoulder vs hip as a proxy for rounding
-        const backAngle = Math.abs(leftShoulder.x - leftHip.x);
-        if (backAngle > 50) {
-          incorrect.push("left_shoulder", "left_hip");
-          feedback = "Keep back straight";
+      // Check hip angle (shoulder-hip-knee)
+      if (leftShoulder && leftHip && leftKnee && 
+          leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftKnee.visibility > 0.4) {
+        const hipAngle = getAngle(leftShoulder, leftHip, leftKnee);
+        
+        if (hipAngle < 70) {
+          incorrect.push("left_hip", "left_shoulder", "left_knee");
+          feedback = "Hips too low - maintain hip angle";
         }
       }
 
+      // Check back alignment (shoulder-hip horizontal)
+      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
+        const backTilt = Math.abs(leftShoulder.x - leftHip.x);
+        if (backTilt > 60) {
+          incorrect.push("left_shoulder", "left_hip");
+          feedback = "Keep back straight & chest up";
+        }
+      }
+
+      // Check knee width (valgus/varus)
       if (leftKnee && rightKnee && leftKnee.visibility > 0.4 && rightKnee.visibility > 0.4) {
         const kneeDistance = Math.abs(leftKnee.x - rightKnee.x);
         if (kneeDistance < 60) {
           incorrect.push("left_knee", "right_knee");
-          feedback = "Push knees outward";
+          feedback = "Push knees outward - hip width";
         }
       }
     }
 
-    // Push-up form
+    // PUSH-UP - Angular perfection checks
     if (exerciseLower.includes("push") || (exerciseLower.includes("up") && exerciseLower.includes("push"))) {
+      // Check body alignment (shoulder-hip-ankle should be straight)
       if (leftShoulder && leftHip && leftAnkle &&
           leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const bodyAngle = getAngle(leftShoulder, leftHip, leftAnkle);
+        
+        if (bodyAngle < 160) {
+          incorrect.push("left_shoulder", "left_hip", "left_ankle");
+          feedback = "Keep body straight - plank position";
+        }
+        
+        // Check for sagging hips
         const shoulderHipDiff = Math.abs(leftShoulder.y - leftHip.y);
         const hipAnkleDiff = Math.abs(leftHip.y - leftAnkle.y);
-        if (shoulderHipDiff > 40 || hipAnkleDiff > 40) {
-          incorrect.push("left_shoulder", "left_hip", "left_ankle");
-          feedback = "Keep body straight";
+        if (shoulderHipDiff > 50 || hipAnkleDiff > 50) {
+          incorrect.push("left_hip");
+          feedback = "Don't let hips sag";
         }
       }
 
+      // Check elbow angle (shoulder-elbow-wrist)
       if (leftShoulder && leftElbow && leftWrist &&
           leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        
         if (elbowAngle < 70) {
-          incorrect.push("left_elbow", "left_wrist");
-          feedback = "Lower chest more";
+          incorrect.push("left_elbow", "left_wrist", "left_shoulder");
+          feedback = "Go deeper - chest to ground";
+        } else if (elbowAngle > 170) {
+          incorrect.push("left_elbow");
+          feedback = "Lock out at top";
+        }
+        
+        // Check elbow flare (should be ~45° from body)
+        if (leftElbow && leftShoulder && leftElbow.visibility > 0.4) {
+          const elbowFlare = Math.abs(leftElbow.x - leftShoulder.x);
+          if (elbowFlare > 80) {
+            incorrect.push("left_elbow", "left_shoulder");
+            feedback = "Keep elbows tucked - 45° angle";
+          }
         }
       }
     }
 
-    // Pull-up form
+    // PULL-UP - Angular perfection checks
     if (exerciseLower.includes("pull")) {
-      // basic checks: keep shoulders engaged and avoid swinging — heuristic: large hip movement = swing
+      // Check elbow angle (shoulder-elbow-wrist) - full range of motion
+      if (leftShoulder && leftElbow && leftWrist &&
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
+        const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        
+        if (elbowAngle < 40) {
+          incorrect.push("left_elbow", "left_shoulder", "left_wrist");
+          feedback = "Perfect pull! Chin over bar";
+        } else if (elbowAngle > 160) {
+          incorrect.push("left_elbow", "left_shoulder");
+          feedback = "Pull higher - chin over bar";
+        } else if (elbowAngle > 100 && elbowAngle < 140) {
+          incorrect.push("left_elbow");
+          feedback = "Full range - pull all the way up";
+        }
+      }
+
+      // Check shoulder engagement angle
+      if (leftShoulder && leftElbow && leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4) {
+        const shoulderEngagement = Math.abs(leftShoulder.y - leftElbow.y);
+        if (shoulderEngagement < 30) {
+          incorrect.push("left_shoulder", "left_elbow");
+          feedback = "Engage shoulders - don't hang";
+        }
+      }
+
+      // Check for swinging/kipping (hip stability)
       if (leftHip && rightHip && leftHip.visibility > 0.4 && rightHip.visibility > 0.4) {
         const hipShift = Math.abs(leftHip.x - rightHip.x);
-        if (hipShift > 150) { // arbitrary threshold for excessive swing across x-axis
+        if (hipShift > 100) {
           incorrect.push("left_hip", "right_hip");
-          feedback = "Reduce swinging";
+          feedback = "Stop swinging - strict form";
         }
       }
-      // elbow angle check
+
+      // Check body alignment (no excessive arch)
+      if (leftShoulder && leftHip && leftKnee &&
+          leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftKnee.visibility > 0.4) {
+        const bodyArch = getAngle(leftShoulder, leftHip, leftKnee);
+        if (bodyArch < 140) {
+          incorrect.push("left_hip", "left_knee");
+          feedback = "Keep body straight - don't arch";
+        }
+      }
+    }
+
+    // LUNGE - Angular perfection checks
+    if (exerciseLower.includes("lunge")) {
+      // Check front knee angle (hip-knee-ankle) - should be ~90°
+      if (leftHip && leftKnee && leftAnkle && 
+          leftHip.visibility > 0.4 && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const frontKneeAngle = getAngle(leftHip, leftKnee, leftAnkle);
+        
+        if (frontKneeAngle < 70) {
+          incorrect.push("left_knee", "left_hip", "left_ankle");
+          feedback = "Don't go too deep - 90° knee angle";
+        } else if (frontKneeAngle > 110) {
+          incorrect.push("left_knee");
+          feedback = "Lower down - aim for 90° angle";
+        }
+        
+        // Front knee alignment - should not pass toes
+        if (leftKnee.x > leftAnkle.x + 30) {
+          incorrect.push("left_knee", "left_ankle");
+          feedback = "Keep front knee behind toes";
+        }
+      }
+
+      // Check back knee angle (should also be ~90°)
+      if (rightHip && rightKnee && rightAnkle && 
+          rightHip.visibility > 0.4 && rightKnee.visibility > 0.4 && rightAnkle.visibility > 0.4) {
+        const backKneeAngle = getAngle(rightHip, rightKnee, rightAnkle);
+        
+        if (backKneeAngle > 110) {
+          incorrect.push("right_knee", "right_hip");
+          feedback = "Lower back knee closer to ground";
+        }
+      }
+
+      // Check torso angle (shoulder-hip should be upright)
+      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
+        const torsoTilt = Math.abs(leftShoulder.x - leftHip.x);
+        if (torsoTilt > 50) {
+          incorrect.push("left_shoulder", "left_hip");
+          feedback = "Keep torso upright & vertical";
+        }
+        
+        // Check forward lean
+        const shoulderHipAngle = Math.abs(leftShoulder.y - leftHip.y);
+        if (shoulderHipAngle < 40) {
+          incorrect.push("left_shoulder", "left_hip");
+          feedback = "Don't lean forward - stay upright";
+        }
+      }
+
+      // Check hip alignment (should stay level)
+      if (leftHip && rightHip && leftHip.visibility > 0.4 && rightHip.visibility > 0.4) {
+        const hipTilt = Math.abs(leftHip.y - rightHip.y);
+        if (hipTilt > 30) {
+          incorrect.push("left_hip", "right_hip");
+          feedback = "Keep hips level";
+        }
+      }
+    }
+
+    // PLANK - Angular perfection checks
+    if (exerciseLower.includes("plank")) {
+      // Check body alignment (shoulder-hip-ankle should be perfectly straight)
+      if (leftShoulder && leftHip && leftAnkle && 
+          leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const bodyAngle = getAngle(leftShoulder, leftHip, leftAnkle);
+        
+        if (bodyAngle < 165) {
+          incorrect.push("left_hip", "left_shoulder", "left_ankle");
+          feedback = "Hips sagging - raise them up";
+        } else if (bodyAngle > 195) {
+          incorrect.push("left_hip");
+          feedback = "Hips too high - lower them down";
+        }
+      }
+
+      // Check elbow angle (should be 90° for forearm plank)
       if (leftShoulder && leftElbow && leftWrist &&
           leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
         const elbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
-        if (elbowAngle > 160) {
-          incorrect.push("left_elbow", "left_shoulder");
-          feedback = "Pull higher";
+        
+        if (elbowAngle < 70 || elbowAngle > 110) {
+          incorrect.push("left_elbow", "left_wrist");
+          feedback = "Keep forearms perpendicular";
+        }
+      }
+
+      // Check shoulder position (should be directly above elbows)
+      if (leftShoulder && leftElbow && leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4) {
+        const shoulderElbowDist = Math.abs(leftShoulder.x - leftElbow.x);
+        if (shoulderElbowDist > 50) {
+          incorrect.push("left_shoulder", "left_elbow");
+          feedback = "Shoulders over elbows";
+        }
+      }
+
+      // Check neck alignment
+      if (leftShoulder && L("nose") && leftShoulder.visibility > 0.4 && L("nose")?.visibility > 0.4) {
+        const neck = L("nose");
+        if (neck && neck.y < leftShoulder.y - 50) {
+          incorrect.push("left_shoulder");
+          feedback = "Look down - neutral neck";
         }
       }
     }
 
-    // Lunge form
-    if (exerciseLower.includes("lunge")) {
-      // front knee alignment relative to ankle (x positions)
-      if (leftKnee && leftAnkle && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
-        if (leftKnee.x > leftAnkle.x + 30) {
-          incorrect.push("left_knee", "left_ankle");
-          feedback = "Keep knee behind toes";
+    // JUMPING JACKS - Angular perfection checks
+    if (exerciseLower.includes("jack") || exerciseLower.includes("jump")) {
+      // Check arm angle at top position
+      if (leftShoulder && leftElbow && leftWrist &&
+          leftShoulder.visibility > 0.4 && leftElbow.visibility > 0.4 && leftWrist.visibility > 0.4) {
+        const armAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        
+        // Arms should be nearly straight when raised
+        if (leftWrist.y < leftShoulder.y && armAngle < 150) {
+          incorrect.push("left_elbow", "left_wrist");
+          feedback = "Straighten arms overhead";
         }
       }
-      // check torso upright
-      if (leftShoulder && leftHip && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4) {
-        const torsoTilt = Math.abs(leftShoulder.y - leftHip.y);
-        if (torsoTilt > 60) {
-          incorrect.push("left_shoulder", "left_hip");
-          feedback = "Keep torso upright";
-        }
-      }
-    }
 
-    // Plank form
-    if (exerciseLower.includes("plank")) {
-      if (leftShoulder && leftHip && leftKnee && leftShoulder.visibility > 0.4 && leftHip.visibility > 0.4 && leftKnee.visibility > 0.4) {
-        const hipAngle = getAngle(leftShoulder, leftHip, leftKnee);
-        if (hipAngle < thresholds.plank.hipShoulderMin) {
-          incorrect.push("left_hip", "left_shoulder");
-          feedback = "Keep hips in line with shoulders";
+      // Check leg spread angle
+      if (leftHip && leftKnee && leftAnkle &&
+          leftHip.visibility > 0.4 && leftKnee.visibility > 0.4 && leftAnkle.visibility > 0.4) {
+        const legAngle = getAngle(leftHip, leftKnee, leftAnkle);
+        
+        // Legs should stay relatively straight
+        if (legAngle < 160) {
+          incorrect.push("left_knee");
+          feedback = "Keep legs straight during jump";
+        }
+      }
+
+      // Check landing stability
+      if (leftAnkle && rightAnkle && leftAnkle.visibility > 0.4 && rightAnkle.visibility > 0.4) {
+        const ankleLevelDiff = Math.abs(leftAnkle.y - rightAnkle.y);
+        if (ankleLevelDiff > 40) {
+          incorrect.push("left_ankle", "right_ankle");
+          feedback = "Land with both feet together";
         }
       }
     }
@@ -570,29 +788,35 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     setFormFeedback(feedback);
   };
 
-  // draw keypoints with enhanced visibility
+  // draw keypoints with MAXIMUM visibility - THICK AF
   const drawKeypoints = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     keypoints.forEach((keypoint) => {
       if (keypoint.visibility && keypoint.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(keypoint.name);
         
-        // Draw glow effect
-        ctx.shadowBlur = 20;
+        // Draw massive glow effect
+        ctx.shadowBlur = 40;
         ctx.shadowColor = isIncorrect ? "#ef4444" : "#00ff00";
         
-        // Draw outer circle (glow)
+        // Draw outer glow circle (huge)
         ctx.beginPath();
-        ctx.arc(keypoint.x, keypoint.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = isIncorrect ? "rgba(239, 68, 68, 0.5)" : "rgba(0, 255, 0, 0.5)";
+        ctx.arc(keypoint.x, keypoint.y, 20, 0, 2 * Math.PI);
+        ctx.fillStyle = isIncorrect ? "rgba(239, 68, 68, 0.6)" : "rgba(0, 255, 0, 0.6)";
         ctx.fill();
         
-        // Draw inner circle (main dot)
+        // Draw middle circle
         ctx.beginPath();
-        ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
+        ctx.arc(keypoint.x, keypoint.y, 14, 0, 2 * Math.PI);
+        ctx.fillStyle = isIncorrect ? "rgba(239, 68, 68, 0.8)" : "rgba(0, 255, 0, 0.8)";
+        ctx.fill();
+        
+        // Draw inner circle (main dot) - THICK
+        ctx.beginPath();
+        ctx.arc(keypoint.x, keypoint.y, 10, 0, 2 * Math.PI);
         ctx.fillStyle = isIncorrect ? "#ef4444" : "#00ff00";
         ctx.fill();
         ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 4;
         ctx.stroke();
         
         // Reset shadow
@@ -601,7 +825,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
     });
   };
 
-  // draw skeleton connections with enhanced visibility
+  // draw skeleton connections with MAXIMUM visibility - THICK AF
   const drawSkeleton = (ctx: CanvasRenderingContext2D, keypoints: any[]) => {
     const connections: [string,string][] = [
       ["left_shoulder", "right_shoulder"],
@@ -625,25 +849,43 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       if (startKp?.visibility && endKp?.visibility && startKp.visibility > 0.4 && endKp.visibility > 0.4) {
         const isIncorrect = incorrectJoints.includes(start) || incorrectJoints.includes(end);
         
-        // Draw glow effect for lines
-        ctx.shadowBlur = 15;
+        // Draw MASSIVE glow effect for lines
+        ctx.shadowBlur = 30;
         ctx.shadowColor = isIncorrect ? "#ef4444" : "#00ff00";
         
-        // Draw thicker background line for glow
+        // Draw outermost glow layer - SUPER THICK
+        ctx.beginPath();
+        ctx.moveTo(startKp.x, startKp.y);
+        ctx.lineTo(endKp.x, endKp.y);
+        ctx.strokeStyle = isIncorrect ? "rgba(239, 68, 68, 0.4)" : "rgba(0, 255, 0, 0.4)";
+        ctx.lineWidth = isIncorrect ? 35 : 30;
+        ctx.stroke();
+        
+        // Draw middle glow layer
+        ctx.shadowBlur = 25;
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
         ctx.strokeStyle = isIncorrect ? "rgba(239, 68, 68, 0.6)" : "rgba(0, 255, 0, 0.6)";
-        ctx.lineWidth = isIncorrect ? 16 : 12;
+        ctx.lineWidth = isIncorrect ? 25 : 20;
         ctx.stroke();
         
-        // Draw main line
-        ctx.shadowBlur = 10;
+        // Draw main line - THICK AF
+        ctx.shadowBlur = 20;
         ctx.beginPath();
         ctx.moveTo(startKp.x, startKp.y);
         ctx.lineTo(endKp.x, endKp.y);
         ctx.strokeStyle = isIncorrect ? "#ef4444" : "#00ff00";
-        ctx.lineWidth = isIncorrect ? 10 : 8;
+        ctx.lineWidth = isIncorrect ? 18 : 15;
+        ctx.stroke();
+        
+        // Draw core line with white border for extra visibility
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.moveTo(startKp.x, startKp.y);
+        ctx.lineTo(endKp.x, endKp.y);
+        ctx.strokeStyle = isIncorrect ? "#ff6b6b" : "#00ff00";
+        ctx.lineWidth = isIncorrect ? 12 : 10;
         ctx.stroke();
         
         // Reset shadow
