@@ -206,37 +206,19 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
   const initializePoseDetection = async () => {
     setInitError(null);
     try {
-      // attempt to create Pose using static import (common in bundlers)
-      // If Pose isn't available as constructor for some reason (CDN blocked), fallback to dynamic import
-      let PoseCtor: any;
-      let CameraUtil: any;
+      // Import MediaPipe Pose and Camera utilities
+      const { Pose } = await import("@mediapipe/pose");
+      let Camera: any = null;
 
-      try {
-        // try dynamic import to ensure module is available in all environments
-        const poseModule = await import("@mediapipe/pose");
-        PoseCtor = (poseModule as any).Pose || (poseModule as any).default || (poseModule as any);
-      } catch (err) {
-        console.warn("Static @mediapipe/pose import failed, will try CDN-based locateFile route.", err);
-        // fallback: try to use global Pose if injected by CDN script (rare in bundlers)
-        PoseCtor = (window as any).Pose;
-      }
-
-      // If PoseCtor still not found, throw
-      if (!PoseCtor) {
-        throw new Error("MediaPipe Pose module not available. Ensure @mediapipe/pose installed or CDN reachable.");
-      }
-
-      // Camera util (used if available) - dynamic import if possible
       try {
         const cameraModule = await import("@mediapipe/camera_utils");
-        CameraUtil = (cameraModule as any).Camera || (cameraModule as any).default || (cameraModule as any);
+        Camera = cameraModule.Camera;
       } catch (err) {
-        // Not fatal — we can use a manual loop with pose.send()
-        CameraUtil = null;
+        console.warn("Camera utils not available, using manual loop:", err);
       }
 
       // instantiate pose
-      poseRef.current = new PoseCtor({
+      poseRef.current = new Pose({
         locateFile: (file: string) => {
           // prefer CDN if bundler doesn't supply assets
           return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
@@ -259,16 +241,16 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
       setIsModelLoading(false);
       setIsDetecting(true);
 
-      // If CameraUtil available, use it to handle frames; else run manual loop
-      if (CameraUtil && videoRef.current) {
+      // If Camera available, use it to handle frames; else run manual loop
+      if (Camera && videoRef.current) {
         try {
           // store camera util for potential cleanup
-          cameraUtilRef.current = new CameraUtil(videoRef.current, {
+          cameraUtilRef.current = new Camera(videoRef.current, {
             onFrame: async () => {
               try {
                 await poseRef.current.send({ image: videoRef.current });
               } catch (e) {
-                console.error("pose.send error (CameraUtil):", e);
+                console.error("pose.send error (Camera):", e);
               }
             },
             width: 640,
@@ -277,7 +259,7 @@ const ExerciseSession = ({ exercise, open, onClose }: ExerciseSessionProps) => {
           // start camera util
           await cameraUtilRef.current.start();
         } catch (camErr) {
-          console.warn("CameraUtil start failed, falling back to manual loop:", camErr);
+          console.warn("Camera start failed, falling back to manual loop:", camErr);
           detectPose(); // fallback
         }
       } else {
